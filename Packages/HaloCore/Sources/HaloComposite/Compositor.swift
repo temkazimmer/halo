@@ -1,5 +1,6 @@
 import CoreVideo
 import Foundation
+import HaloShapes
 import Metal
 import simd
 
@@ -150,19 +151,18 @@ public final class Compositor {
     public func renderPreview(
         camera: CVPixelBuffer?,
         cameraPixelFormat: OSType,
-        feather: CGFloat,
-        zoom: CGFloat,
-        offset: CGPoint,
-        mirrored: Bool,
+        style: BubbleStyle,
+        bubbleSize: CGFloat,
         pixelSize: CGSize,
         into target: any MTLTexture
     ) throws {
-        // The bubble fills the whole layer, so it is centred with a half-extent
-        // of one half in normalised space.
+        // Centred in the layer, with the surrounding room left for border and
+        // shadow — the caller sizes the panel to match.
         let layout = BubbleLayout(
             centre: CGPoint(x: pixelSize.width / 2, y: pixelSize.height / 2),
-            size: min(pixelSize.width, pixelSize.height),
-            zoom: zoom, offset: offset, feather: feather, mirrored: mirrored)
+            size: max(bubbleSize, 8),
+            style: style,
+            mirrored: style.mirrorPreview)
 
         var uniforms = Self.uniforms(
             layout: layout,
@@ -262,32 +262,56 @@ public final class Compositor {
 
         guard let layout, let camera else {
             return CompositorUniforms(
+                borderColor: .zero, shadowColor: .zero,
                 bubbleCentre: .zero, bubbleRadius: SIMD2(1, 1),
+                cameraOffset: .zero, shadowOffset: .zero,
                 cornerAntialias: 0, feather: 0, cameraAspect: 1, zoom: 1,
-                cameraOffset: .zero, mirrorCamera: 0, cameraIsYCbCr: 0,
+                rotation: 0, aspect: 1,
+                shapeA: 0, shapeB: 0, shapeC: 0, shapeD: 0,
+                borderWidth: 0, shadowRadius: 0, shadowOpacity: 0, time: 0,
+                shapeKind: 0, mirrorCamera: 0, cameraIsYCbCr: 0,
                 cameraIsFullRange: 0, hasCamera: 0, hasScreen: hasScreen ? 1 : 0)
         }
 
+        let style = layout.style.clamped()
         let cameraWidth = Float(CVPixelBufferGetWidth(camera))
         let cameraHeight = Float(max(CVPixelBufferGetHeight(camera), 1))
-        let radius = Float(layout.size) / 2
-
-        let isYCbCr = Self.isBiplanar(cameraPixelFormat)
-        let isFullRange = Self.isFullRange(cameraPixelFormat)
+        // Everything in shape space is relative to the half-extent, so lengths in
+        // points convert by dividing through by it.
+        let radius = Float(max(layout.size / 2, 1))
+        let parameters = style.shape.shaderParameters
 
         return CompositorUniforms(
+            borderColor: SIMD4(style.border?.color ?? .white),
+            shadowColor: SIMD4(style.shadow?.color ?? .black),
             bubbleCentre: SIMD2(Float(layout.centre.x) / width, Float(layout.centre.y) / height),
             bubbleRadius: SIMD2(radius / width, radius / height),
+            cameraOffset: SIMD2(Float(style.offset.x), Float(style.offset.y)),
+            // Screen y grows downward here, so a positive style offset reads as
+            // "down" the way the control implies.
+            shadowOffset: SIMD2(
+                Float(style.shadow?.offset.x ?? 0) / width,
+                Float(style.shadow?.offset.y ?? 0) / height),
             // Normalised floor for the antialias width, so a small bubble on a
             // large output still resolves cleanly.
-            cornerAntialias: 1.0 / max(radius, 1),
-            feather: Float(layout.feather) / max(radius, 1),
+            cornerAntialias: 1.0 / radius,
+            feather: Float(style.feather) / radius,
             cameraAspect: cameraWidth / cameraHeight,
-            zoom: Float(max(layout.zoom, 0.01)),
-            cameraOffset: SIMD2(Float(layout.offset.x), Float(layout.offset.y)),
+            zoom: Float(max(style.zoom, 0.01)),
+            rotation: Float(style.rotation),
+            aspect: Float(style.aspect),
+            shapeA: parameters.a,
+            shapeB: parameters.b,
+            shapeC: parameters.c,
+            shapeD: parameters.d,
+            borderWidth: Float(style.border?.width ?? 0) / radius,
+            shadowRadius: Float(style.shadow?.radius ?? 0) / radius,
+            shadowOpacity: Float(style.shadow?.opacity ?? 0),
+            time: 0,
+            shapeKind: UInt32(style.shape.kindIndex),
             mirrorCamera: layout.mirrored ? 1 : 0,
-            cameraIsYCbCr: isYCbCr ? 1 : 0,
-            cameraIsFullRange: isFullRange ? 1 : 0,
+            cameraIsYCbCr: isBiplanar(cameraPixelFormat) ? 1 : 0,
+            cameraIsFullRange: isFullRange(cameraPixelFormat) ? 1 : 0,
             hasCamera: 1,
             hasScreen: hasScreen ? 1 : 0)
     }

@@ -1,4 +1,5 @@
 import CoreVideo
+import HaloShapes
 import Metal
 import Testing
 import simd
@@ -18,13 +19,13 @@ struct CompositorTests {
 
     @Test("Swift and Metal uniform layouts agree")
     func uniformLayoutIsStable() {
-        // 3 float2 (8 each) + 4 float (4 each) + 5 uint (4 each) = 24 + 16 + 20.
-        // Guards the hand-maintained match with `Uniforms` in Shaders.metal:
-        // adding a field on one side only shows up here rather than as corrupt
-        // video.
-        #expect(MemoryLayout<CompositorUniforms>.size == 60)
-        #expect(MemoryLayout<CompositorUniforms>.alignment == 8)
-        #expect(MemoryLayout<CompositorUniforms>.stride == 64)
+        // 2 float4 (16 each) + 4 float2 (8 each) + 14 float + 6 uint (4 each)
+        // = 32 + 32 + 56 + 24. Guards the hand-maintained match with `Uniforms`
+        // in Shaders.metal: adding a field on one side only shows up here rather
+        // than as corrupt video.
+        #expect(MemoryLayout<CompositorUniforms>.size == 144)
+        #expect(MemoryLayout<CompositorUniforms>.alignment == 16)
+        #expect(MemoryLayout<CompositorUniforms>.stride == 144)
     }
 
     @Test("The preview renders the same mask with a transparent surround")
@@ -41,7 +42,8 @@ struct CompositorTests {
         try compositor.renderPreview(
             camera: camera,
             cameraPixelFormat: kCVPixelFormatType_32BGRA,
-            feather: 0.5, zoom: 1, offset: .zero, mirrored: true,
+            style: BubbleStyle(),
+            bubbleSize: 200,
             pixelSize: CGSize(width: 256, height: 256),
             into: target)
 
@@ -74,10 +76,12 @@ struct CompositorTests {
             layout: nil, into: destination)
 
         let centre = try Self.pixel(destination, x: 64, y: 48)
-        // A full sRGB -> linear -> sRGB round trip must be lossless enough to
-        // land within a code point or two.
-        #expect(abs(Int(centre.red) - 230) <= 3)
-        #expect(abs(Int(centre.blue) - 40) <= 3)
+        // Every pixel round-trips sRGB -> linear -> sRGB, so this has to be
+        // essentially lossless. A wrong transfer exponent shows up here and
+        // nowhere else — it once cost 18 code points on the blue channel.
+        #expect(abs(Int(centre.red) - 230) <= 1)
+        #expect(abs(Int(centre.green) - 40) <= 1)
+        #expect(abs(Int(centre.blue) - 40) <= 1)
     }
 
     @Test("The camera fills the bubble and nothing outside it")

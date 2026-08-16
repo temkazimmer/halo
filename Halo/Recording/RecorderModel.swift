@@ -2,6 +2,7 @@ import AppKit
 import HaloCapture
 import HaloComposite
 import HaloExport
+import HaloShapes
 import Observation
 import UniformTypeIdentifiers
 
@@ -39,6 +40,17 @@ final class RecorderModel {
     private(set) var isBubbleVisible = false
     var selectedCameraID: String?
 
+    /// Applied live to the floating bubble, including during a recording.
+    var style = BubbleStyle() {
+        didSet {
+            guard style != oldValue else { return }
+            bubble.apply(style)
+        }
+    }
+    private(set) var presets = ShapePresetLibrary.builtIn()
+
+    private static let presetsKey = "halo.shapePresets"
+
     private let session = RecordingSession()
     private let provider = ShareableContentProvider()
     private let camera = CameraCapture()
@@ -49,6 +61,10 @@ final class RecorderModel {
     private var tickTask: Task<Void, Never>?
 
     init() {
+        if let data = UserDefaults.standard.data(forKey: Self.presetsKey),
+           let stored = ShapePresetLibrary.decoded(from: data) {
+            presets = stored
+        }
         cameraDevices = camera.devices
         selectedCameraID = camera.devices.first?.id
 
@@ -79,6 +95,36 @@ final class RecorderModel {
         }
     }
 
+    // MARK: - Shape and presets
+
+    func applyPreset(_ preset: ShapePreset) {
+        style = preset.style
+    }
+
+    func savePreset(named name: String) {
+        presets.add(ShapePreset(name: name, style: style))
+        persistPresets()
+    }
+
+    func removePreset(id: ShapePreset.ID) {
+        presets.remove(id: id)
+        persistPresets()
+    }
+
+    func movePresets(fromOffsets source: IndexSet, toOffset destination: Int) {
+        presets.move(fromOffsets: source, toOffset: destination)
+        persistPresets()
+    }
+
+    func preset(forShortcutIndex index: Int) -> ShapePreset? {
+        presets.preset(forShortcutIndex: index)
+    }
+
+    private func persistPresets() {
+        guard let data = try? presets.encoded() else { return }
+        UserDefaults.standard.set(data, forKey: Self.presetsKey)
+    }
+
     /// Maps the panel's frame from AppKit screen points into output pixels.
     ///
     /// Two conversions, both easy to get wrong: AppKit's y grows upward while
@@ -103,7 +149,11 @@ final class RecorderModel {
             centre: CGPoint(
                 x: (frame.midX - bounds.minX) * scale,
                 y: (bounds.maxY - frame.midY) * scale),
-            size: frame.width * scale)
+            // The shape's own extent, not the panel's — the panel is larger by
+            // whatever room the border and shadow need.
+            size: bubble.shapeSize * scale,
+            style: style,
+            mirrored: style.mirrorOutput)
     }
 
     var selectedDisplay: DisplaySource? {

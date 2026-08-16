@@ -1,6 +1,7 @@
 import AppKit
 import HaloCapture
 import HaloComposite
+import HaloShapes
 import Metal
 import QuartzCore
 
@@ -24,6 +25,9 @@ final class BubbleView: NSView {
 
     private let compositor: Compositor
     private let frameLatch: FrameLatch
+
+    /// Applied live, including during a recording — the inspector edits this.
+    var style: BubbleStyle = BubbleStyle() { didSet { needsLayout = true } }
     private let metalLayer = CAMetalLayer()
     private var displayLink: CADisplayLink?
 
@@ -82,14 +86,12 @@ final class BubbleView: NSView {
         else { return }
 
         do {
+            let scale = window?.backingScaleFactor ?? 2
             try compositor.renderPreview(
                 camera: frame.buffer,
                 cameraPixelFormat: frame.format,
-                feather: 0.5,
-                zoom: 1.0,
-                offset: .zero,
-                // People expect to see themselves mirrored; the recording is not.
-                mirrored: true,
+                style: style,
+                bubbleSize: style.size * scale,
                 pixelSize: metalLayer.drawableSize,
                 into: drawable.texture)
             drawable.present()

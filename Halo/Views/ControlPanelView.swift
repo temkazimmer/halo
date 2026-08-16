@@ -15,6 +15,10 @@ struct ControlPanelView: View {
                     ScrollView {
                         VStack(spacing: 0) {
                             CameraSettingsView()
+                            if recorder.isBubbleVisible {
+                                Divider()
+                                ShapeInspectorView()
+                            }
                             Divider()
                             AudioSettingsView()
                         }

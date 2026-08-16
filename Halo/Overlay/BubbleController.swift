@@ -28,8 +28,17 @@ final class BubbleController {
 
     private var panel: BubblePanel?
     private var view: BubbleView?
-    private var size: CGFloat = 220
     private var anchor: SnapAnchor? = .bottomTrailing
+
+    /// Drives both the panel's size and how the bubble is drawn.
+    private(set) var style = BubbleStyle()
+
+    /// The bubble's own extent, plus room for a border or shadow to spill into.
+    private var panelSize: CGFloat {
+        CGFloat(style.size + style.decorationPadding * 2)
+    }
+    /// The shape's extent, which is what the layout in the recording uses.
+    var shapeSize: CGFloat { CGFloat(style.size) }
 
     private static let inset: CGFloat = 28
     /// How close a drop has to land before it snaps rather than staying free.
@@ -38,9 +47,10 @@ final class BubbleController {
     func show(compositor: Compositor, frameLatch: FrameLatch) {
         guard panel == nil else { return }
 
-        let panel = BubblePanel(size: size)
+        let panel = BubblePanel(size: panelSize)
         let view = BubbleView(compositor: compositor, frameLatch: frameLatch)
-        view.frame = NSRect(x: 0, y: 0, width: size, height: size)
+        view.style = style
+        view.frame = NSRect(x: 0, y: 0, width: panelSize, height: panelSize)
         panel.contentView = view
 
         view.onDragEnded = { [weak self] frame in self?.settle(after: frame) }
@@ -50,7 +60,7 @@ final class BubbleController {
         if let screen = NSScreen.main {
             panel.setFrameOrigin(
                 (anchor ?? .bottomTrailing).origin(
-                    in: screen.visibleFrame, size: size, inset: Self.inset))
+                    in: screen.visibleFrame, size: panelSize, inset: Self.inset))
         }
 
         // Not makeKeyAndOrderFront: that would steal focus from whatever is
@@ -79,9 +89,23 @@ final class BubbleController {
 
     // MARK: - Placement
 
+    /// Applies a new style live, including mid-recording.
+    func apply(_ newStyle: BubbleStyle) {
+        style = newStyle.clamped()
+        view?.style = style
+        resizePanel()
+        onGeometryChanged?()
+    }
+
     private func resize(to newSize: CGFloat) {
+        style.size = Double(newSize)
+        resizePanel()
+        onGeometryChanged?()
+    }
+
+    private func resizePanel() {
         guard let panel else { return }
-        size = newSize
+        let newSize = panelSize
 
         // Grow about the centre; resizing from the origin makes the bubble
         // appear to crawl across the screen.
@@ -90,12 +114,12 @@ final class BubbleController {
         frame.size = NSSize(width: newSize, height: newSize)
         frame.origin = NSPoint(x: centre.x - newSize / 2, y: centre.y - newSize / 2)
         panel.setFrame(frame, display: true)
+        panel.contentView?.frame = NSRect(x: 0, y: 0, width: newSize, height: newSize)
 
         if let anchor, let screen = panel.screen ?? NSScreen.main {
             panel.setFrameOrigin(
                 anchor.origin(in: screen.visibleFrame, size: newSize, inset: Self.inset))
         }
-        onGeometryChanged?()
     }
 
     /// Snaps to the nearest of the nine anchors if the drop landed close to one,
@@ -108,7 +132,7 @@ final class BubbleController {
         let best = SnapAnchor.nearest(
             to: CGPoint(x: frame.midX, y: frame.midY),
             in: screen.visibleFrame,
-            size: size,
+            size: panelSize,
             inset: Self.inset)
 
         guard best.distance <= Self.snapDistance else {
