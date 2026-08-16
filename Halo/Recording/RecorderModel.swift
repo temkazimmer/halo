@@ -1,5 +1,6 @@
 import AppKit
 import HaloCapture
+import HaloExport
 import Observation
 import UniformTypeIdentifiers
 
@@ -18,8 +19,20 @@ final class RecorderModel {
     private(set) var errorMessage: String?
     private(set) var elapsed: Duration = .zero
     private(set) var isLoadingSources = false
+    private(set) var audioInputDevices: [AudioInputDevice] = []
+    private(set) var levels: [AudioMixer.Source: Float] = [:]
 
     var selectedDisplayID: CGDirectDisplayID?
+    var capturesSystemAudio = true
+    var capturesMicrophone = true
+    var microphoneDeviceID: String?
+
+    var systemAudioGain: Float = 1 {
+        didSet { session.mixer.setGain(systemAudioGain, for: .systemAudio) }
+    }
+    var microphoneGain: Float = 1 {
+        didSet { session.mixer.setGain(microphoneGain, for: .microphone) }
+    }
 
     private let session = RecordingSession()
     private let provider = ShareableContentProvider()
@@ -36,6 +49,9 @@ final class RecorderModel {
     func loadSources() async {
         isLoadingSources = true
         defer { isLoadingSources = false }
+
+        audioInputDevices = AudioInputDevices.available()
+
         do {
             sources = try await provider.fetch()
             // Keep any existing choice; otherwise default to the main display.
@@ -55,13 +71,19 @@ final class RecorderModel {
 
     func startRecording() async {
         guard let display = selectedDisplay, phase == .idle else { return }
-        guard let url = await destinationURL(for: display) else { return }
+        guard let url = await destinationURL() else { return }
 
         errorMessage = nil
         lastResult = nil
 
         do {
-            try await session.start(display: display, to: url)
+            try await session.start(
+                display: display,
+                to: url,
+                options: RecordingOptions(
+                    capturesSystemAudio: capturesSystemAudio,
+                    capturesMicrophone: capturesMicrophone,
+                    microphoneDeviceID: microphoneDeviceID))
             phase = .recording
             startTicking()
         } catch {
@@ -80,6 +102,7 @@ final class RecorderModel {
             errorMessage = error.localizedDescription
         }
         elapsed = .zero
+        levels = [:]
         phase = .idle
     }
 
@@ -92,7 +115,7 @@ final class RecorderModel {
 
     /// The save panel runs out of process under the sandbox and extends our
     /// sandbox to whatever the user picks. A hand-built path would simply fail.
-    private func destinationURL(for display: DisplaySource) async -> URL? {
+    private func destinationURL() async -> URL? {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.mpeg4Movie]
         panel.canCreateDirectories = true
@@ -110,17 +133,32 @@ final class RecorderModel {
         return "Halo \(formatter.string(from: Date())).mp4"
     }
 
-    // MARK: - Elapsed time
+    // MARK: - Meters and elapsed time
 
     private func startTicking() {
         elapsed = .zero
+        levels = [:]
+
         tickTask = Task { [weak self] in
             let started = ContinuousClock.now
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
+                try? await Task.sleep(for: .milliseconds(40))
                 guard let self else { return }
                 self.elapsed = ContinuousClock.now - started
+                self.updateLevels()
             }
+        }
+    }
+
+    /// The mixer reports the last peak it saw, which would simply stick if a
+    /// source went quiet. Falling back towards the reported value gives the
+    /// meters normal decay ballistics.
+    private func updateLevels() {
+        let reported = session.mixer.levels()
+        for source in AudioMixer.Source.allCases {
+            let current = reported[source] ?? 0
+            let previous = levels[source] ?? 0
+            levels[source] = max(current, previous * 0.82)
         }
     }
 

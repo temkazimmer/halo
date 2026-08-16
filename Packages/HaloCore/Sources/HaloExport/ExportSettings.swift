@@ -12,19 +12,22 @@ public struct ExportSettings: Sendable, Equatable {
     public var averageBitRate: Int
     /// Keyframe every N frames.
     public var maxKeyFrameInterval: Int
+    public var audioBitRate: Int
 
     public init(
         width: Int,
         height: Int,
         frameRate: Int = 60,
         averageBitRate: Int = 40_000_000,
-        maxKeyFrameInterval: Int = 120
+        maxKeyFrameInterval: Int = 120,
+        audioBitRate: Int = 192_000
     ) {
         self.width = width
         self.height = height
         self.frameRate = frameRate
         self.averageBitRate = averageBitRate
         self.maxKeyFrameInterval = maxKeyFrameInterval
+        self.audioBitRate = audioBitRate
     }
 
     /// Encoder configuration.
@@ -51,6 +54,20 @@ public struct ExportSettings: Sendable, Equatable {
                 // latency and reordering for no quality gain at this bitrate.
                 AVVideoAllowFrameReorderingKey: false,
             ] as [String: any Sendable],
+        ]
+    }
+
+    /// Encoder configuration for the single mixed audio track.
+    ///
+    /// The mixer always delivers `AudioFormats.canonical`, so this needs no
+    /// `sourceFormatHint` — the input format is fixed and known up front rather
+    /// than discovered from the first buffer.
+    public var audioOutputSettings: [String: any Sendable] {
+        [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: AudioFormats.sampleRate,
+            AVNumberOfChannelsKey: Int(AudioFormats.channelCount),
+            AVEncoderBitRateKey: audioBitRate,
         ]
     }
 

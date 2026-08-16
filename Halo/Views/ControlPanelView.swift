@@ -12,6 +12,8 @@ struct ControlPanelView: View {
                 VStack(spacing: 0) {
                     SourcePickerView()
                     Divider()
+                    AudioSettingsView()
+                    Divider()
                     RecordingControlsView()
                 }
                 .environment(recorder)
@@ -20,6 +22,6 @@ struct ControlPanelView: View {
                 OnboardingView()
             }
         }
-        .frame(minWidth: 460, minHeight: 520)
+        .frame(minWidth: 460, minHeight: 640)
     }
 }

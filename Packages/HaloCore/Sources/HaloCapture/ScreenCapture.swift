@@ -1,5 +1,6 @@
 import CoreMedia
 import CoreVideo
+import HaloExport
 import ScreenCaptureKit
 
 /// Owns one `SCStream` and hands complete screen frames to a callback.
@@ -15,18 +16,30 @@ public final class ScreenCapture: NSObject {
         /// Windows to keep out of the capture. From Phase 3 this is how the camera
         /// bubble is excluded — `NSWindow.sharingType` does not work against SCK.
         public var excludedWindowIDs: [CGWindowID]
+        public var capturesSystemAudio: Bool
+        public var capturesMicrophone: Bool
+        /// `AVCaptureDevice.uniqueID`; `nil` uses the system default input.
+        public var microphoneDeviceID: String?
 
         public init(
             display: DisplaySource,
             frameRate: Int = 60,
             showsCursor: Bool = true,
-            excludedWindowIDs: [CGWindowID] = []
+            excludedWindowIDs: [CGWindowID] = [],
+            capturesSystemAudio: Bool = true,
+            capturesMicrophone: Bool = true,
+            microphoneDeviceID: String? = nil
         ) {
             self.display = display
             self.frameRate = frameRate
             self.showsCursor = showsCursor
             self.excludedWindowIDs = excludedWindowIDs
+            self.capturesSystemAudio = capturesSystemAudio
+            self.capturesMicrophone = capturesMicrophone
+            self.microphoneDeviceID = microphoneDeviceID
         }
+
+        public var capturesAnyAudio: Bool { capturesSystemAudio || capturesMicrophone }
     }
 
     public enum Failure: Error, LocalizedError, Equatable {
@@ -44,6 +57,7 @@ public final class ScreenCapture: NSObject {
     }
 
     public typealias FrameHandler = (CVPixelBuffer, CMTime) -> Void
+    public typealias AudioHandler = (CMSampleBuffer, AudioMixer.Source) -> Void
     public typealias ErrorHandler = (any Error) -> Void
 
     /// Invoked on `queue`, never on the main actor.
@@ -54,23 +68,33 @@ public final class ScreenCapture: NSObject {
     /// way to express "this value is confined to that queue". Both closures are
     /// immutable and set once at init, and they are called from nowhere else.
     nonisolated(unsafe) private let onFrame: FrameHandler
+    nonisolated(unsafe) private let onAudio: AudioHandler
     nonisolated(unsafe) private let onError: ErrorHandler
 
-    /// Supplied by the owner so it can also barrier on it — after `stop()` a
-    /// `sync` on this queue proves no callback is still in flight.
-    private let queue: DispatchQueue
+    /// One queue per output type, as the media types have independent clocks and
+    /// must not block each other. Supplied by the owner so it can also barrier on
+    /// them — after `stop()`, a `sync` on each proves no callback is in flight.
+    private let videoQueue: DispatchQueue
+    private let systemAudioQueue: DispatchQueue
+    private let microphoneQueue: DispatchQueue
 
     private var stream: SCStream?
 
     public var isRunning: Bool { stream != nil }
 
     public init(
-        queue: DispatchQueue,
+        videoQueue: DispatchQueue,
+        systemAudioQueue: DispatchQueue,
+        microphoneQueue: DispatchQueue,
         onFrame: @escaping FrameHandler,
+        onAudio: @escaping AudioHandler,
         onError: @escaping ErrorHandler
     ) {
-        self.queue = queue
+        self.videoQueue = videoQueue
+        self.systemAudioQueue = systemAudioQueue
+        self.microphoneQueue = microphoneQueue
         self.onFrame = onFrame
+        self.onAudio = onAudio
         self.onError = onError
         super.init()
     }
@@ -85,7 +109,14 @@ public final class ScreenCapture: NSObject {
 
         let stream = SCStream(
             filter: filter, configuration: streamConfiguration, delegate: self)
-        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
+        if configuration.capturesSystemAudio {
+            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: systemAudioQueue)
+        }
+        if configuration.capturesMicrophone {
+            try stream.addStreamOutput(
+                self, type: .microphone, sampleHandlerQueue: microphoneQueue)
+        }
         try await stream.startCapture()
         self.stream = stream
     }
@@ -136,6 +167,18 @@ public final class ScreenCapture: NSObject {
             value: 1, timescale: CMTimeScale(configuration.frameRate))
         stream.queueDepth = 5  // must not exceed 8
         stream.showsCursor = configuration.showsCursor
+
+        stream.capturesAudio = configuration.capturesSystemAudio
+        stream.captureMicrophone = configuration.capturesMicrophone
+        stream.microphoneCaptureDeviceID = configuration.microphoneDeviceID
+        // Without this our own preview audio would be captured back, and any
+        // future playback in-app would feed back on itself.
+        stream.excludesCurrentProcessAudio = true
+        // Applies to the system-audio stream only. The microphone arrives in its
+        // device's native format regardless, which is why it must be converted.
+        stream.sampleRate = Int(AudioFormats.sampleRate)
+        stream.channelCount = Int(AudioFormats.channelCount)
+
         return stream
     }
 }
@@ -148,18 +191,28 @@ extension ScreenCapture: SCStreamOutput {
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of type: SCStreamOutputType
     ) {
-        guard type == .screen else { return }
-
         // Nothing derived from this buffer may outlive the callback: holding its
         // IOSurface past return leaks, and once queueDepth surfaces are held
         // ScreenCaptureKit stops delivering frames altogether.
         autoreleasepool {
-            guard sampleBuffer.isValid,
-                  Self.isComplete(sampleBuffer),
-                  let pixelBuffer = sampleBuffer.imageBuffer
-            else { return }
+            guard sampleBuffer.isValid else { return }
 
-            onFrame(pixelBuffer, sampleBuffer.presentationTimeStamp)
+            switch type {
+            case .screen:
+                guard Self.isComplete(sampleBuffer),
+                      let pixelBuffer = sampleBuffer.imageBuffer
+                else { return }
+                onFrame(pixelBuffer, sampleBuffer.presentationTimeStamp)
+
+            case .audio:
+                onAudio(sampleBuffer, .systemAudio)
+
+            case .microphone:
+                onAudio(sampleBuffer, .microphone)
+
+            @unknown default:
+                return
+            }
         }
     }
 

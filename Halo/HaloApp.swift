@@ -12,7 +12,7 @@ struct HaloApp: App {
             ControlPanelView()
                 .environment(permissions)
         }
-        .defaultSize(width: 460, height: 580)
+        .defaultSize(width: 480, height: 720)
         .windowResizability(.contentMinSize)
 
         MenuBarExtra("Halo", systemImage: permissions.isReady ? "circle.dashed" : "exclamationmark.circle") {
