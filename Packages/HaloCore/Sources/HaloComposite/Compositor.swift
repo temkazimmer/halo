@@ -70,10 +70,24 @@ public final class Compositor {
         textureCache = try TextureCache(device: device)
     }
 
-    /// SwiftPM does not compile `.metal` sources, so the shader ships as a
-    /// resource and is compiled once at start-up. The package's tests compile it
-    /// too, so a broken shader fails the build rather than surfacing at runtime.
+    /// Loads the shader by whichever route the build system left available.
+    ///
+    /// The two builds of this package behave differently, and both are supported
+    /// rather than one being worked around:
+    ///
+    /// - **Xcode** compiles `Shaders.metal` into a `default.metallib` inside the
+    ///   package's resource bundle, ignoring the `.copy` rule. That is the better
+    ///   outcome — the shader is validated at build time and costs nothing at
+    ///   launch — so it is tried first.
+    /// - **SwiftPM from the command line** does not compile `.metal` at all and
+    ///   simply copies the source, so the tests compile it at runtime. A broken
+    ///   shader therefore still fails `swift test` rather than surfacing on a
+    ///   user's machine.
     private static func makeLibrary(device: any MTLDevice) throws -> any MTLLibrary {
+        if let precompiled = try? device.makeDefaultLibrary(bundle: .module) {
+            return precompiled
+        }
+
         guard let url = Bundle.module.url(forResource: "Shaders", withExtension: "metal"),
               let source = try? String(contentsOf: url, encoding: .utf8)
         else { throw CompositorError.shaderSourceMissing }

@@ -14,8 +14,9 @@ let package = Package(
     targets: [
         .target(name: "HaloExport"),
         .target(name: "HaloShapes"),
-        // SwiftPM does not compile .metal sources, so the shader ships as a
-        // resource and is compiled at start-up. See Compositor.makeLibrary.
+        // The shader ships as a resource. Xcode compiles it into a
+        // default.metallib and ignores the .copy; SwiftPM copies the source and
+        // leaves it uncompiled. Compositor.makeLibrary handles both.
         .target(
             name: "HaloComposite",
             dependencies: ["HaloShapes"],
