@@ -79,6 +79,7 @@ public final class ScreenCapture: NSObject {
     private let microphoneQueue: DispatchQueue
 
     private var stream: SCStream?
+    private var currentConfiguration: Configuration?
 
     public var isRunning: Bool { stream != nil }
 
@@ -119,11 +120,26 @@ public final class ScreenCapture: NSObject {
         }
         try await stream.startCapture()
         self.stream = stream
+        currentConfiguration = configuration
+    }
+
+    /// Rebuilds the content filter on a running stream — no restart needed.
+    ///
+    /// Used when the camera bubble appears, disappears, or is recreated: its
+    /// window has to be excluded, and `SCShareableContent` snapshots go stale
+    /// immediately, so the filter is rebuilt from a fresh one each time.
+    public func updateExcludedWindows(_ windowIDs: [CGWindowID]) async throws {
+        guard let stream, var configuration = currentConfiguration else { return }
+        configuration.excludedWindowIDs = windowIDs
+        let filter = try await Self.makeFilter(for: configuration)
+        try await stream.updateContentFilter(filter)
+        currentConfiguration = configuration
     }
 
     public func stop() async throws {
         guard let stream else { return }
         self.stream = nil
+        currentConfiguration = nil
         try await stream.stopCapture()
     }
 

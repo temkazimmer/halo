@@ -12,7 +12,14 @@ struct ControlPanelView: View {
                 VStack(spacing: 0) {
                     SourcePickerView()
                     Divider()
-                    AudioSettingsView()
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            CameraSettingsView()
+                            Divider()
+                            AudioSettingsView()
+                        }
+                    }
+                    .frame(maxHeight: 340)
                     Divider()
                     RecordingControlsView()
                 }

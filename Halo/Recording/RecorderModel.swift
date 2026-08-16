@@ -34,9 +34,39 @@ final class RecorderModel {
         didSet { session.mixer.setGain(microphoneGain, for: .microphone) }
     }
 
+    private(set) var cameraDevices: [CameraDevice] = []
+    private(set) var isBubbleVisible = false
+    var selectedCameraID: String?
+
     private let session = RecordingSession()
     private let provider = ShareableContentProvider()
+    private let camera = CameraCapture()
+    private let bubble = BubbleController()
     private var tickTask: Task<Void, Never>?
+
+    init() {
+        cameraDevices = camera.devices
+        selectedCameraID = camera.devices.first?.id
+
+        // Continuity Cameras come and go as the iPhone wakes and sleeps.
+        camera.onDevicesChanged = { [weak self] in
+            guard let self else { return }
+            self.cameraDevices = self.camera.devices
+            if let selected = self.selectedCameraID,
+               !self.camera.devices.contains(where: { $0.id == selected }) {
+                self.selectedCameraID = self.camera.devices.first?.id
+                if self.isBubbleVisible { self.restartCamera() }
+            }
+        }
+
+        // The bubble must never appear in the recording. Its window ID changes
+        // whenever the panel is recreated, so a running stream is told each time.
+        bubble.onWindowIDChanged = { [weak self] windowID in
+            guard let self else { return }
+            self.isBubbleVisible = self.bubble.isVisible
+            Task { await self.syncExcludedWindows(windowID) }
+        }
+    }
 
     var selectedDisplay: DisplaySource? {
         sources.displays.first { $0.id == selectedDisplayID }
@@ -67,6 +97,43 @@ final class RecorderModel {
         }
     }
 
+    // MARK: - Camera bubble
+
+    func toggleBubble() {
+        if bubble.isVisible {
+            bubble.hide()
+            camera.stop()
+        } else {
+            do {
+                try camera.start(deviceID: selectedCameraID)
+                bubble.show(session: camera.session)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func selectCamera(_ deviceID: String?) {
+        selectedCameraID = deviceID
+        if bubble.isVisible { restartCamera() }
+    }
+
+    private func restartCamera() {
+        do {
+            try camera.start(deviceID: selectedCameraID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func syncExcludedWindows(_ windowID: CGWindowID?) async {
+        do {
+            try await session.updateExcludedWindows(windowID.map { [$0] } ?? [])
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     // MARK: - Recording
 
     func startRecording() async {
@@ -83,7 +150,11 @@ final class RecorderModel {
                 options: RecordingOptions(
                     capturesSystemAudio: capturesSystemAudio,
                     capturesMicrophone: capturesMicrophone,
-                    microphoneDeviceID: microphoneDeviceID))
+                    microphoneDeviceID: microphoneDeviceID,
+                    // Phase 4 composites the camera into the frame. Until then it
+                    // must be excluded, or the recording shows the floating panel
+                    // rather than a composited bubble.
+                    excludedWindowIDs: bubble.windowID.map { [$0] } ?? []))
             phase = .recording
             startTicking()
         } catch {

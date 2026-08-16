@@ -173,6 +173,12 @@ public final class RecordingSession {
         startedAt = ContinuousClock.now
     }
 
+    /// Keeps the camera bubble out of the recording while it is running.
+    public func updateExcludedWindows(_ windowIDs: [CGWindowID]) async throws {
+        guard state == .recording else { return }
+        try await capture?.updateExcludedWindows(windowIDs)
+    }
+
     @discardableResult
     public func stop() async throws -> RecordingResult {
         guard state == .recording, let writer else {
