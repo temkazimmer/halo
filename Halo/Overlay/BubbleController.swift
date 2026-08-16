@@ -33,10 +33,9 @@ final class BubbleController {
     /// Drives both the panel's size and how the bubble is drawn.
     private(set) var style = BubbleStyle()
 
-    /// The bubble's own extent, plus room for a border or shadow to spill into.
-    private var panelSize: CGFloat {
-        CGFloat(style.size + style.decorationPadding * 2)
-    }
+    /// Sized to the shape's true extent, not its nominal size — see
+    /// `BubbleStyle.panelSize`.
+    private var panelSize: CGFloat { CGFloat(style.panelSize) }
     /// The shape's extent, which is what the layout in the recording uses.
     var shapeSize: CGFloat { CGFloat(style.size) }
 

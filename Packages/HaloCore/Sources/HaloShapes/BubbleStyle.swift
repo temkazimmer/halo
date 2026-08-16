@@ -112,6 +112,16 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
         return borderWidth + shadow.radius + drift
     }
 
+    /// The panel's edge length: enough for the shape at its true extent, plus
+    /// room for any border and shadow.
+    ///
+    /// Sizing to `size` alone clips every shape that reaches past radius 1 — a
+    /// high-amplitude blob most obviously — and because the clip follows the
+    /// window edge it appears as a rectangle around the bubble.
+    public var panelSize: Double {
+        size * shape.boundingRadius + decorationPadding * 2
+    }
+
     public func clamped() -> BubbleStyle {
         var copy = self
         copy.shape = shape.clamped()

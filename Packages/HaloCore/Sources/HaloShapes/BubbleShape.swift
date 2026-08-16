@@ -73,6 +73,34 @@ public enum BubbleShape: Equatable, Codable, Hashable, Sendable {
         }
     }
 
+    /// How far the outline reaches from the centre, in units of the nominal
+    /// half-extent.
+    ///
+    /// Only a circle stays at 1. A blob's lobes push past it, and a squircle or
+    /// rounded rect reaches out to its corners. The floating panel is sized by
+    /// this, because a panel sized to 1.0 clips everything that exceeds it — and
+    /// the clip is a straight window edge, so it reads as a rectangular box
+    /// around the bubble.
+    public var boundingRadius: Double {
+        switch self {
+        case .circle:
+            return 1
+        case .squircle(let exponent):
+            // Superellipse |x|^n + |y|^n = 1 is furthest out along the diagonal,
+            // at 2^(1/2 - 1/n): 1.0 at n = 2, rising towards sqrt(2).
+            return pow(2, 0.5 - 1 / max(exponent, 2))
+        case .roundedRect(let cornerRadius):
+            let r = min(1, max(0, cornerRadius))
+            return (1 - r) * 2.0.squareRoot() + r
+        case .polygon, .star:
+            // Both SDFs are built with a circumradius of 1, and the rounding
+            // compensation preserves it.
+            return 1
+        case .blob(_, let amplitude, _, _):
+            return 1 + max(0, amplitude)
+        }
+    }
+
     /// Clamps parameters into ranges the SDFs behave well over.
     ///
     /// Out-of-range values do not error, they just look wrong — a polygon with
