@@ -9,7 +9,9 @@ import ScreenCaptureKit
 /// queue, which is what the callback is invoked on — see the note on `onFrame`.
 @MainActor
 public final class ScreenCapture: NSObject {
-    public struct Configuration: Sendable, Equatable {
+    /// Not `Sendable`: a system-picker target carries an `SCContentFilter`.
+    /// Only ever used on the main actor.
+    public struct Configuration {
         public var target: CaptureTarget
         public var frameRate: Int
         public var showsCursor: Bool
@@ -166,6 +168,11 @@ public final class ScreenCapture: NSObject {
                 configuration.excludedWindowIDs.contains($0.windowID)
             }
             return SCContentFilter(display: display, excludingWindows: excluded)
+
+        case .picked(let picked):
+            // Already a filter; the user chose exactly what it covers, and the
+            // picker was told to exclude our overlays.
+            return picked.filter
 
         case .window(let source):
             guard let window = content.windows.first(where: { $0.windowID == source.id })

@@ -11,8 +11,16 @@ struct SourcePickerView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
+            systemPickerCard
+
             List(selection: $recorder.selectedTargetID) {
-                Section("Displays") {
+                if let picked = recorder.pickedContent {
+                    Section("Chosen with macOS") {
+                        PickedRow(picked: picked).tag(picked.id)
+                    }
+                }
+
+                Section("Or pick directly") {
                     if recorder.sources.displays.isEmpty {
                         Text("No displays found").foregroundStyle(.secondary)
                     } else {
@@ -40,6 +48,34 @@ struct SourcePickerView: View {
         }
     }
 
+    /// The recommended path, so it leads rather than hides in a menu.
+    private var systemPickerCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "rectangle.inset.filled.badge.record")
+                .font(.title3)
+                .foregroundStyle(.tint)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Choose with macOS")
+                    .font(.callout.weight(.medium))
+                Text("The standard system panel. Halo only ever sees what you pick.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Choose…") { recorder.presentSystemPicker() }
+                .buttonStyle(.borderedProminent)
+                .disabled(recorder.phase.isBusy)
+        }
+        .padding(12)
+        .background(.tint.opacity(0.1), in: .rect(cornerRadius: 10))
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+    }
+
     private var header: some View {
         HStack {
             Text("Sources")
@@ -55,6 +91,29 @@ struct SourcePickerView: View {
         .padding(.horizontal, 20)
         .padding(.top, 20)
         .padding(.bottom, 12)
+    }
+}
+
+private struct PickedRow: View {
+    let picked: PickedContent
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.rectangle")
+                .foregroundStyle(.tint)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(picked.name)
+                Text("\(Int(picked.pixelSize.width)) × \(Int(picked.pixelSize.height))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
     }
 }
 

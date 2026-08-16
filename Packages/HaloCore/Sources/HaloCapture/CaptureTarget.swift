@@ -1,14 +1,22 @@
 import CoreGraphics
 
 /// What a recording captures.
-public enum CaptureTarget: Identifiable, Hashable, Sendable {
+///
+/// Neither `Sendable` nor `Hashable`, because a system-picker selection carries
+/// an `SCContentFilter` that is neither. It is only ever used on the main actor,
+/// and the UI selects on `id`.
+public enum CaptureTarget: Identifiable {
     case display(DisplaySource)
     case window(WindowSource)
+    /// Chosen through the macOS system picker, which hands back an opaque filter
+    /// rather than a display or a window.
+    case picked(PickedContent)
 
     public var id: String {
         switch self {
         case .display(let display): "display:\(display.id)"
         case .window(let window): "window:\(window.id)"
+        case .picked(let picked): picked.id
         }
     }
 
@@ -16,6 +24,7 @@ public enum CaptureTarget: Identifiable, Hashable, Sendable {
         switch self {
         case .display(let display): display.name
         case .window(let window): window.title
+        case .picked(let picked): picked.name
         }
     }
 
@@ -33,6 +42,8 @@ public enum CaptureTarget: Identifiable, Hashable, Sendable {
             CGSize(
                 width: Self.even(window.frame.width * CGFloat(window.scale)),
                 height: Self.even(window.frame.height * CGFloat(window.scale)))
+        case .picked(let picked):
+            picked.pixelSize
         }
     }
 
@@ -40,7 +51,7 @@ public enum CaptureTarget: Identifiable, Hashable, Sendable {
     /// position is measured from.
     public var originInScreenPoints: CGPoint? {
         switch self {
-        case .display: nil  // resolved from the matching NSScreen
+        case .display, .picked: nil  // resolved from the matching NSScreen
         case .window(let window): window.frame.origin
         }
     }
@@ -49,6 +60,7 @@ public enum CaptureTarget: Identifiable, Hashable, Sendable {
         switch self {
         case .display(let display): display.scale
         case .window(let window): window.scale
+        case .picked(let picked): picked.scale
         }
     }
 

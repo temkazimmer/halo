@@ -61,6 +61,10 @@ final class RecorderModel {
     let destinations = DestinationStore()
     @ObservationIgnored private var hotKey: GlobalHotKey?
     private let indicator = RecordingIndicatorController()
+    @ObservationIgnored private let systemPicker = ContentPicker()
+    /// The most recent system-picker selection, which takes precedence over the
+    /// built-in list until the list is used again.
+    private(set) var pickedContent: PickedContent?
 
     /// Persisted so the app comes back the way it was left.
     private enum Key {
@@ -127,6 +131,16 @@ final class RecorderModel {
         bubble.onGeometryChanged = { [weak self] in
             self?.updateBubbleLayout()
         }
+
+        systemPicker.onPick = { [weak self] picked in
+            guard let self else { return }
+            self.pickedContent = picked
+            self.selectedTargetID = picked.id
+            self.errorMessage = nil
+        }
+        systemPicker.onFailure = { [weak self] message in
+            self?.errorMessage = message
+        }
     }
 
     // MARK: - Shape and presets
@@ -190,9 +204,22 @@ final class RecorderModel {
             mirrored: style.mirrorOutput)
     }
 
-    /// Everything that can be recorded, displays first.
+    /// Everything that can be recorded. A system-picker selection comes first,
+    /// because choosing there is the primary path.
     var targets: [CaptureTarget] {
-        sources.displays.map(CaptureTarget.display) + sources.windows.map(CaptureTarget.window)
+        (pickedContent.map { [CaptureTarget.picked($0)] } ?? [])
+            + sources.displays.map(CaptureTarget.display)
+            + sources.windows.map(CaptureTarget.window)
+    }
+
+    /// Opens the macOS panel for choosing what to share.
+    ///
+    /// Apple's documented recommendation and the default path here: it satisfies
+    /// Guideline 5.1.1(iii) data minimisation, and avoids the wording about
+    /// bypassing the system picker. Halo's own list stays as the alternative,
+    /// since it can show resolutions the panel does not.
+    func presentSystemPicker() {
+        systemPicker.present(excludedWindowIDs: overlayWindowIDs)
     }
 
     var selectedTarget: CaptureTarget? {
@@ -227,7 +254,7 @@ final class RecorderModel {
         do {
             sources = try await provider.fetch()
             // Keep any existing choice; otherwise default to the main display.
-            if selectedTarget == nil {
+            if selectedTarget == nil, pickedContent == nil {
                 let main = sources.displays.first { $0.isMain } ?? sources.displays.first
                 selectedTargetID = main.map { CaptureTarget.display($0).id }
             }
