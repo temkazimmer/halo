@@ -283,9 +283,8 @@ final class RecorderModel {
     /// bubble because the compositor draws it, the indicator because it would
     /// otherwise be burned in.
     private func syncExcludedWindows(_ windowID: CGWindowID?) async {
-        let ids = [windowID, indicator.windowID].compactMap(\.self)
         do {
-            try await session.updateExcludedWindows(ids)
+            try await session.updateExcludedWindows(overlayWindowIDs)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -345,18 +344,48 @@ final class RecorderModel {
         // enough to persist settings.
         persistSettings()
 
+        // Shown before the countdown, and so before any content filter is built.
+        // SCContentFilter can only exclude windows that are already in the
+        // SCShareableContent snapshot, and a window created in the same instant
+        // has not been published by the window server yet — it would be silently
+        // excluded from nothing and recorded.
+        showIndicator()
+
         for remaining in stride(from: countdownSeconds, through: 1, by: -1) {
             phase = .counting(remaining)
             try? await Task.sleep(for: .seconds(1))
             // Cancelled mid-countdown.
-            guard case .counting = phase else { return }
+            guard case .counting = phase else {
+                indicator.hide()
+                return
+            }
+        }
+
+        // With no countdown there is still a window-server round trip to wait
+        // for, so give it one before the filter is built.
+        if countdownSeconds == 0 {
+            try? await Task.sleep(for: .milliseconds(150))
         }
 
         await startRecording(to: url)
     }
 
     func cancelCountdown() {
-        if case .counting = phase { phase = .idle }
+        guard case .counting = phase else { return }
+        phase = .idle
+        indicator.hide()
+    }
+
+    private func showIndicator() {
+        indicator.show(
+            elapsed: { [weak self] in self?.elapsedText() ?? "00:00" },
+            onStop: { [weak self] in Task { await self?.stopRecording() } })
+    }
+
+    /// Everything Halo floats over the screen, which all has to stay out of the
+    /// recording.
+    private var overlayWindowIDs: [CGWindowID] {
+        [bubble.windowID, indicator.windowID].compactMap(\.self)
     }
 
     private func startRecording(to url: URL) async {
@@ -374,19 +403,18 @@ final class RecorderModel {
                     capturesMicrophone: capturesMicrophone,
                     microphoneDeviceID: microphoneDeviceID,
                     // Still excluded: the compositor draws the bubble into the
-                    // frame, so capturing the panel as well would record it twice.
-                    excludedWindowIDs: bubble.windowID.map { [$0] } ?? []),
+                    // frame, so capturing the panel as well would record it
+                    // twice, and the indicator would be burned in.
+                    excludedWindowIDs: overlayWindowIDs),
                 camera: bubble.isVisible ? camera.frameLatch : nil,
                 compositor: bubble.isVisible ? compositor : nil)
             phase = .recording
             startTicking()
-            indicator.show(
-                elapsed: { [weak self] in self?.elapsedText() ?? "00:00" },
-                onStop: { [weak self] in Task { await self?.stopRecording() } })
-            // The indicator's own window appears after the stream starts, so the
-            // filter is rebuilt now that its ID exists.
+            // Belt and braces: re-apply the exclusions against a fresh snapshot,
+            // in case either overlay was published late.
             await syncExcludedWindows(bubble.windowID)
         } catch {
+            indicator.hide()
             errorMessage = error.localizedDescription
         }
     }

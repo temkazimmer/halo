@@ -146,14 +146,15 @@ public final class ScreenCapture: NSObject {
     // MARK: - Configuration
 
     private static func makeFilter(for configuration: Configuration) async throws -> SCContentFilter {
-        // Re-fetched every time: SCShareableContent snapshots go stale instantly,
-        // and a filter built from a stale one silently captures the wrong thing.
-        let content: SCShareableContent
-        do {
-            content = try await SCShareableContent.excludingDesktopWindows(
-                false, onScreenWindowsOnly: true)
-        } catch let error as SCStreamError where error.code == .userDeclined {
-            throw Failure.permissionDenied
+        var content = try await fetchContent()
+
+        // A window the snapshot has not published yet cannot be excluded, and the
+        // failure is silent: the filter simply excludes nothing and the overlay
+        // is recorded. Re-fetch once rather than accept that.
+        if !configuration.excludedWindowIDs.isEmpty,
+           !Self.contains(configuration.excludedWindowIDs, in: content) {
+            try? await Task.sleep(for: .milliseconds(120))
+            content = try await fetchContent()
         }
 
         switch configuration.target {
@@ -175,6 +176,24 @@ public final class ScreenCapture: NSObject {
             // exclusion here.
             return SCContentFilter(desktopIndependentWindow: window)
         }
+    }
+
+    /// Snapshots go stale instantly, so this is never cached — a filter built
+    /// from a stale one silently captures the wrong thing.
+    private static func fetchContent() async throws -> SCShareableContent {
+        do {
+            return try await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true)
+        } catch let error as SCStreamError where error.code == .userDeclined {
+            throw Failure.permissionDenied
+        }
+    }
+
+    private static func contains(
+        _ windowIDs: [CGWindowID], in content: SCShareableContent
+    ) -> Bool {
+        let published = Set(content.windows.map(\.windowID))
+        return windowIDs.allSatisfy(published.contains)
     }
 
     private static func makeStreamConfiguration(
