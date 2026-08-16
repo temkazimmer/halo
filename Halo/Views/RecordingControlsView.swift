@@ -33,13 +33,23 @@ struct RecordingControlsView: View {
     private var status: some View {
         switch recorder.phase {
         case .idle:
-            if let display = recorder.selectedDisplay {
-                Text(display.name)
+            if let target = recorder.selectedTarget {
+                Text(target.name)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             } else {
-                Text("Select a display")
+                Text("Select a display or window")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .counting(let remaining):
+            HStack(spacing: 8) {
+                Text("\(remaining)")
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.tint)
+                Text("Starting…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -67,13 +77,26 @@ struct RecordingControlsView: View {
     private var actionButton: some View {
         switch recorder.phase {
         case .idle:
-            Button {
-                Task { await recorder.startRecording() }
-            } label: {
-                Label("Record", systemImage: "record.circle")
+            HStack(spacing: 8) {
+                Menu {
+                    Button("Save As…") {
+                        Task { await recorder.beginRecording(saveAs: true) }
+                    }
+                    Divider()
+                    Button("Choose Folder…") { recorder.chooseDestinationFolder() }
+                } label: {
+                    Label("Record", systemImage: "record.circle")
+                } primaryAction: {
+                    Task { await recorder.beginRecording() }
+                }
+                .menuStyle(.button)
+                .buttonStyle(.borderedProminent)
+                .fixedSize()
+                .disabled(!recorder.canRecord)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(!recorder.canRecord)
+
+        case .counting:
+            Button("Cancel") { recorder.cancelCountdown() }
 
         case .recording:
             Button {

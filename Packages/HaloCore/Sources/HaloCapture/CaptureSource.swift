@@ -41,19 +41,24 @@ public struct WindowSource: Identifiable, Hashable, Sendable {
     public let applicationName: String
     public let bundleIdentifier: String?
     public let frame: CGRect
+    /// Backing scale of the screen the window is on, so its capture can be at
+    /// native resolution rather than points.
+    public let scale: Int
 
     public init(
         id: CGWindowID,
         title: String,
         applicationName: String,
         bundleIdentifier: String?,
-        frame: CGRect
+        frame: CGRect,
+        scale: Int = 2
     ) {
         self.id = id
         self.title = title
         self.applicationName = applicationName
         self.bundleIdentifier = bundleIdentifier
         self.frame = frame
+        self.scale = scale
     }
 }
 

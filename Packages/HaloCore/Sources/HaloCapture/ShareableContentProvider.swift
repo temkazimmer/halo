@@ -36,7 +36,7 @@ public struct ShareableContentProvider {
 
         return ShareableSources(
             displays: displays,
-            windows: content.windows.compactMap(WindowSource.init(_:)))
+            windows: content.windows.compactMap { metrics.describe($0) })
     }
 }
 
@@ -58,6 +58,17 @@ struct ScreenMetrics {
         return ScreenMetrics(byDisplayID: map)
     }
 
+    /// A window's scale comes from whichever screen it sits on, so a window
+    /// dragged to a non-Retina display is not captured at twice its size.
+    func describe(_ window: SCWindow) -> WindowSource? {
+        let scale = byDisplayID.values
+            .first { $0.frame.intersects(window.frame) }?
+            .backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        return WindowSource(window, scale: Int(scale.rounded()))
+    }
+
     func describe(_ display: SCDisplay) -> DisplaySource {
         let screen = byDisplayID[display.displayID]
         return DisplaySource(
@@ -76,7 +87,7 @@ extension WindowSource {
     /// Returns `nil` for anything the user would not recognise as a window:
     /// menu-bar items, shadows, and other chrome that `SCShareableContent`
     /// happily reports alongside real windows.
-    init?(_ window: SCWindow) {
+    init?(_ window: SCWindow, scale: Int) {
         guard window.isOnScreen,
               let app = window.owningApplication,
               let title = window.title,
@@ -92,7 +103,8 @@ extension WindowSource {
             title: title,
             applicationName: app.applicationName,
             bundleIdentifier: app.bundleIdentifier.isEmpty ? nil : app.bundleIdentifier,
-            frame: window.frame)
+            frame: window.frame,
+            scale: scale)
     }
 
     /// Owners whose windows are system chrome, never a recording target.

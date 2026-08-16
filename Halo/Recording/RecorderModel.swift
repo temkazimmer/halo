@@ -11,8 +11,13 @@ import UniformTypeIdentifiers
 final class RecorderModel {
     enum Phase: Equatable {
         case idle
+        /// Counting down before capture starts, so you can get out of the way.
+        case counting(Int)
         case recording
         case finishing
+
+        var isRecording: Bool { self == .recording }
+        var isBusy: Bool { self != .idle }
     }
 
     private(set) var phase: Phase = .idle
@@ -24,7 +29,9 @@ final class RecorderModel {
     private(set) var audioInputDevices: [AudioInputDevice] = []
     private(set) var levels: [AudioMixer.Source: Float] = [:]
 
-    var selectedDisplayID: CGDirectDisplayID?
+    var selectedTargetID: String?
+    var frameRate = 60
+    var countdownSeconds = 3
     var capturesSystemAudio = true
     var capturesMicrophone = true
     var microphoneDeviceID: String?
@@ -49,10 +56,23 @@ final class RecorderModel {
     }
     private(set) var presets = ShapePresetLibrary.builtIn()
 
-    private static let presetsKey = "halo.shapePresets"
-
     private let session = RecordingSession()
     private let provider = ShareableContentProvider()
+    let destinations = DestinationStore()
+    @ObservationIgnored private var hotKey: GlobalHotKey?
+    private let indicator = RecordingIndicatorController()
+
+    /// Persisted so the app comes back the way it was left.
+    private enum Key {
+        static let presets = "halo.shapePresets"
+        static let style = "halo.bubbleStyle"
+        static let frameRate = "halo.frameRate"
+        static let countdown = "halo.countdownSeconds"
+        static let camera = "halo.cameraDeviceID"
+        static let microphone = "halo.microphoneDeviceID"
+        static let systemAudio = "halo.capturesSystemAudio"
+        static let micEnabled = "halo.capturesMicrophone"
+    }
     private let camera = CameraCapture()
     private let bubble = BubbleController()
     /// One compositor for both the preview and the recording — see Compositor.
@@ -61,12 +81,26 @@ final class RecorderModel {
     private var tickTask: Task<Void, Never>?
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: Self.presetsKey),
+        if let data = UserDefaults.standard.data(forKey: Key.presets),
            let stored = ShapePresetLibrary.decoded(from: data) {
             presets = stored
         }
+        restoreSettings()
         cameraDevices = camera.devices
-        selectedCameraID = camera.devices.first?.id
+        if selectedCameraID == nil || !camera.devices.contains(where: { $0.id == selectedCameraID }) {
+            selectedCameraID = camera.devices.first?.id
+        }
+
+        // Works system-wide, sandboxed, with no entitlement and no TCC grant.
+        hotKey = GlobalHotKey { [weak self] in
+            Task { await self?.toggleRecording() }
+        }
+
+        // The indicator must not appear in the recording it is announcing.
+        indicator.onWindowIDChanged = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.syncExcludedWindows(self.bubbleWindowID) }
+        }
 
         // Continuity Cameras come and go as the iPhone wakes and sleeps.
         camera.onDevicesChanged = { [weak self] in
@@ -122,7 +156,7 @@ final class RecorderModel {
 
     private func persistPresets() {
         guard let data = try? presets.encoded() else { return }
-        UserDefaults.standard.set(data, forKey: Self.presetsKey)
+        UserDefaults.standard.set(data, forKey: Key.presets)
     }
 
     /// Maps the panel's frame from AppKit screen points into output pixels.
@@ -133,7 +167,7 @@ final class RecorderModel {
     private func updateBubbleLayout() {
         guard bubble.isVisible,
               let frame = bubble.frame,
-              let display = selectedDisplay,
+              let display = referenceDisplay,
               let screen = NSScreen.screens.first(where: {
                   ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
                       as? NSNumber)?.uint32Value == display.id
@@ -156,11 +190,31 @@ final class RecorderModel {
             mirrored: style.mirrorOutput)
     }
 
-    var selectedDisplay: DisplaySource? {
-        sources.displays.first { $0.id == selectedDisplayID }
+    /// Everything that can be recorded, displays first.
+    var targets: [CaptureTarget] {
+        sources.displays.map(CaptureTarget.display) + sources.windows.map(CaptureTarget.window)
     }
 
-    var canRecord: Bool { phase == .idle && selectedDisplay != nil }
+    var selectedTarget: CaptureTarget? {
+        targets.first { $0.id == selectedTargetID }
+    }
+
+    /// The display the bubble's position is measured against. Window capture
+    /// still needs one, to convert screen points into pixels.
+    var referenceDisplay: DisplaySource? {
+        switch selectedTarget {
+        case .display(let display): display
+        default: sources.displays.first { $0.isMain } ?? sources.displays.first
+        }
+    }
+
+    var canRecord: Bool { phase == .idle && selectedTarget != nil }
+
+    var destinationName: String { destinations.folderName ?? "Ask every time" }
+
+    func chooseDestinationFolder() {
+        _ = destinations.chooseFolder()
+    }
 
     // MARK: - Sources
 
@@ -173,9 +227,9 @@ final class RecorderModel {
         do {
             sources = try await provider.fetch()
             // Keep any existing choice; otherwise default to the main display.
-            if selectedDisplay == nil {
-                selectedDisplayID = sources.displays.first { $0.isMain }?.id
-                    ?? sources.displays.first?.id
+            if selectedTarget == nil {
+                let main = sources.displays.first { $0.isMain } ?? sources.displays.first
+                selectedTargetID = main.map { CaptureTarget.display($0).id }
             }
             errorMessage = nil
         } catch ShareableContentError.permissionDenied {
@@ -223,30 +277,99 @@ final class RecorderModel {
         }
     }
 
+    private var bubbleWindowID: CGWindowID? { bubble.windowID }
+
+    /// Everything Halo puts on screen has to stay out of the recording: the
+    /// bubble because the compositor draws it, the indicator because it would
+    /// otherwise be burned in.
     private func syncExcludedWindows(_ windowID: CGWindowID?) async {
+        let ids = [windowID, indicator.windowID].compactMap(\.self)
         do {
-            try await session.updateExcludedWindows(windowID.map { [$0] } ?? [])
+            try await session.updateExcludedWindows(ids)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
+    // MARK: - Settings
+
+    private func restoreSettings() {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: Key.style),
+           let stored = try? JSONDecoder().decode(BubbleStyle.self, from: data) {
+            style = stored
+        }
+        if let rate = defaults.object(forKey: Key.frameRate) as? Int { frameRate = rate }
+        if let seconds = defaults.object(forKey: Key.countdown) as? Int {
+            countdownSeconds = seconds
+        }
+        selectedCameraID = defaults.string(forKey: Key.camera)
+        microphoneDeviceID = defaults.string(forKey: Key.microphone)
+        if let value = defaults.object(forKey: Key.systemAudio) as? Bool {
+            capturesSystemAudio = value
+        }
+        if let value = defaults.object(forKey: Key.micEnabled) as? Bool {
+            capturesMicrophone = value
+        }
+    }
+
+    func persistSettings() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(style) {
+            defaults.set(data, forKey: Key.style)
+        }
+        defaults.set(frameRate, forKey: Key.frameRate)
+        defaults.set(countdownSeconds, forKey: Key.countdown)
+        defaults.set(selectedCameraID, forKey: Key.camera)
+        defaults.set(microphoneDeviceID, forKey: Key.microphone)
+        defaults.set(capturesSystemAudio, forKey: Key.systemAudio)
+        defaults.set(capturesMicrophone, forKey: Key.micEnabled)
+    }
+
+    /// The elapsed time as the indicator shows it.
+    func elapsedText() -> String {
+        let total = Int(elapsed.components.seconds)
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
     // MARK: - Recording
 
-    func startRecording() async {
-        guard let display = selectedDisplay, phase == .idle else { return }
-        guard let url = await destinationURL() else { return }
+    /// Starts after the countdown, so you can get out of the way first.
+    func beginRecording(saveAs: Bool = false) async {
+        guard phase == .idle, selectedTarget != nil else { return }
+        guard let url = destinationURL(saveAs: saveAs) else { return }
 
         errorMessage = nil
         lastResult = nil
+        // A menu-bar app's window may never close, so onDisappear alone is not
+        // enough to persist settings.
+        persistSettings()
+
+        for remaining in stride(from: countdownSeconds, through: 1, by: -1) {
+            phase = .counting(remaining)
+            try? await Task.sleep(for: .seconds(1))
+            // Cancelled mid-countdown.
+            guard case .counting = phase else { return }
+        }
+
+        await startRecording(to: url)
+    }
+
+    func cancelCountdown() {
+        if case .counting = phase { phase = .idle }
+    }
+
+    private func startRecording(to url: URL) async {
+        guard let target = selectedTarget else { return }
 
         updateBubbleLayout()
 
         do {
             try await session.start(
-                display: display,
+                target: target,
                 to: url,
                 options: RecordingOptions(
+                    frameRate: frameRate,
                     capturesSystemAudio: capturesSystemAudio,
                     capturesMicrophone: capturesMicrophone,
                     microphoneDeviceID: microphoneDeviceID,
@@ -257,8 +380,25 @@ final class RecorderModel {
                 compositor: bubble.isVisible ? compositor : nil)
             phase = .recording
             startTicking()
+            indicator.show(
+                elapsed: { [weak self] in self?.elapsedText() ?? "00:00" },
+                onStop: { [weak self] in Task { await self?.stopRecording() } })
+            // The indicator's own window appears after the stream starts, so the
+            // filter is rebuilt now that its ID exists.
+            await syncExcludedWindows(bubble.windowID)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// One entry point for the hotkey and the menu bar: whatever state we are
+    /// in, the shortcut does the obvious thing.
+    func toggleRecording() async {
+        switch phase {
+        case .idle: await beginRecording()
+        case .counting: cancelCountdown()
+        case .recording: await stopRecording()
+        case .finishing: break
         }
     }
 
@@ -266,6 +406,7 @@ final class RecorderModel {
         guard phase == .recording else { return }
         phase = .finishing
         stopTicking()
+        indicator.hide()
 
         do {
             lastResult = try await session.stop()
@@ -284,17 +425,16 @@ final class RecorderModel {
 
     // MARK: - Destination
 
-    /// The save panel runs out of process under the sandbox and extends our
-    /// sandbox to whatever the user picks. A hand-built path would simply fail.
-    private func destinationURL() async -> URL? {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie]
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = Self.defaultFileName()
-        panel.title = "Save Recording"
-        panel.prompt = "Start Recording"
-
-        return panel.runModal() == .OK ? panel.url : nil
+    /// The panels run out of process under the sandbox and extend our sandbox to
+    /// whatever the user picks. A hand-built path would simply fail.
+    private func destinationURL(saveAs: Bool) -> URL? {
+        let name = Self.defaultFileName()
+        if !saveAs, let url = destinations.nextURL(defaultName: name) { return url }
+        if !saveAs, destinations.folderURL == nil, destinations.chooseFolder(),
+           let url = destinations.nextURL(defaultName: name) {
+            return url
+        }
+        return destinations.chooseFile(defaultName: name)
     }
 
     private static func defaultFileName() -> String {

@@ -4,7 +4,7 @@ import SwiftUI
 /// show, so onboarding takes the whole window rather than sitting in a sheet.
 struct ControlPanelView: View {
     @Environment(PermissionsModel.self) private var permissions
-    @State private var recorder = RecorderModel()
+    @Environment(RecorderModel.self) private var recorder
 
     var body: some View {
         Group {
@@ -21,14 +21,18 @@ struct ControlPanelView: View {
                             }
                             Divider()
                             AudioSettingsView()
+                            Divider()
+                            RecordingSettingsView()
                         }
                     }
-                    .frame(maxHeight: 340)
+                    .frame(maxHeight: 420)
                     Divider()
                     RecordingControlsView()
                 }
-                .environment(recorder)
                 .task { await recorder.loadSources() }
+                // Settings are saved as the window closes rather than on every
+                // keystroke.
+                .onDisappear { recorder.persistSettings() }
             } else {
                 OnboardingView()
             }

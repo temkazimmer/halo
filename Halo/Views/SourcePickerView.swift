@@ -1,8 +1,7 @@
 import HaloCapture
 import SwiftUI
 
-/// Choose what to record. Displays are selectable; windows are listed but not yet
-/// a capture target, and say so rather than silently doing nothing.
+/// Choose what to record: a whole display, or a single window.
 struct SourcePickerView: View {
     @Environment(RecorderModel.self) private var recorder
 
@@ -12,30 +11,32 @@ struct SourcePickerView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
-            List(selection: $recorder.selectedDisplayID) {
+            List(selection: $recorder.selectedTargetID) {
                 Section("Displays") {
                     if recorder.sources.displays.isEmpty {
                         Text("No displays found").foregroundStyle(.secondary)
                     } else {
                         ForEach(recorder.sources.displays) { display in
-                            DisplayRow(display: display).tag(display.id)
+                            DisplayRow(display: display)
+                                .tag(CaptureTarget.display(display).id)
                         }
                     }
                 }
 
-                Section {
-                    ForEach(recorder.sources.windows) { WindowRow(window: $0) }
-                } header: {
-                    Text("Windows")
-                } footer: {
-                    Text("Window capture arrives in a later phase.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                Section("Windows") {
+                    if recorder.sources.windows.isEmpty {
+                        Text("No windows found").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(recorder.sources.windows) { window in
+                            WindowRow(window: window)
+                                .tag(CaptureTarget.window(window).id)
+                        }
+                    }
                 }
             }
             .listStyle(.inset)
             .alternatingRowBackgrounds()
-            .disabled(recorder.phase != .idle)
+            .disabled(recorder.phase.isBusy)
         }
     }
 
@@ -49,7 +50,7 @@ struct SourcePickerView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .disabled(recorder.isLoadingSources || recorder.phase != .idle)
+            .disabled(recorder.isLoadingSources || recorder.phase.isBusy)
         }
         .padding(.horizontal, 20)
         .padding(.top, 20)
@@ -99,20 +100,23 @@ private struct WindowRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "macwindow")
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(window.title).lineLimit(1)
-                Text(window.applicationName)
+                Text("\(window.applicationName)  ·  \(size)")
                     .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
-        .foregroundStyle(.secondary)
-        .selectionDisabled()
+    }
+
+    private var size: String {
+        let pixels = CaptureTarget.window(window).pixelSize
+        return "\(Int(pixels.width)) × \(Int(pixels.height))"
     }
 }

@@ -10,7 +10,7 @@ import ScreenCaptureKit
 @MainActor
 public final class ScreenCapture: NSObject {
     public struct Configuration: Sendable, Equatable {
-        public var display: DisplaySource
+        public var target: CaptureTarget
         public var frameRate: Int
         public var showsCursor: Bool
         /// Windows to keep out of the capture. From Phase 3 this is how the camera
@@ -22,7 +22,7 @@ public final class ScreenCapture: NSObject {
         public var microphoneDeviceID: String?
 
         public init(
-            display: DisplaySource,
+            target: CaptureTarget,
             frameRate: Int = 60,
             showsCursor: Bool = true,
             excludedWindowIDs: [CGWindowID] = [],
@@ -30,7 +30,7 @@ public final class ScreenCapture: NSObject {
             capturesMicrophone: Bool = true,
             microphoneDeviceID: String? = nil
         ) {
-            self.display = display
+            self.target = target
             self.frameRate = frameRate
             self.showsCursor = showsCursor
             self.excludedWindowIDs = excludedWindowIDs
@@ -49,7 +49,7 @@ public final class ScreenCapture: NSObject {
         public var errorDescription: String? {
             switch self {
             case .displayUnavailable:
-                "That display is no longer available."
+                "That display or window is no longer available."
             case .permissionDenied:
                 "Screen Recording permission is not granted. Grant it in System Settings, then relaunch Halo."
             }
@@ -156,23 +156,32 @@ public final class ScreenCapture: NSObject {
             throw Failure.permissionDenied
         }
 
-        guard let display = content.displays.first(where: {
-            $0.displayID == configuration.display.id
-        }) else {
-            throw Failure.displayUnavailable
-        }
+        switch configuration.target {
+        case .display(let source):
+            guard let display = content.displays.first(where: { $0.displayID == source.id })
+            else { throw Failure.displayUnavailable }
 
-        let excluded = content.windows.filter {
-            configuration.excludedWindowIDs.contains($0.windowID)
+            let excluded = content.windows.filter {
+                configuration.excludedWindowIDs.contains($0.windowID)
+            }
+            return SCContentFilter(display: display, excludingWindows: excluded)
+
+        case .window(let source):
+            guard let window = content.windows.first(where: { $0.windowID == source.id })
+            else { throw Failure.displayUnavailable }
+
+            // Captures only that window, wherever it sits and whatever is in
+            // front of it — so the bubble panel cannot intrude and needs no
+            // exclusion here.
+            return SCContentFilter(desktopIndependentWindow: window)
         }
-        return SCContentFilter(display: display, excludingWindows: excluded)
     }
 
     private static func makeStreamConfiguration(
         for configuration: Configuration
     ) -> SCStreamConfiguration {
         let stream = SCStreamConfiguration()
-        let size = configuration.display.pixelSize
+        let size = configuration.target.pixelSize
         stream.width = Int(size.width)
         stream.height = Int(size.height)
         // Screen content is text-heavy; chroma subsampling here would soften every

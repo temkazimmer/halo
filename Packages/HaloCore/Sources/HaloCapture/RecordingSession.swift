@@ -90,7 +90,7 @@ public final class RecordingSession {
     public init() {}
 
     public func start(
-        display: DisplaySource,
+        target: CaptureTarget,
         to url: URL,
         options: RecordingOptions = RecordingOptions(),
         camera: FrameLatch? = nil,
@@ -98,7 +98,7 @@ public final class RecordingSession {
     ) async throws {
         guard state == .idle else { return }
 
-        let size = display.pixelSize
+        let size = target.pixelSize
         // Built before the stream starts, so no buffer can arrive without a writer.
         let writer = try MovieWriter(
             url: url,
@@ -178,7 +178,7 @@ public final class RecordingSession {
         do {
             try await capture.start(
                 ScreenCapture.Configuration(
-                    display: display,
+                    target: target,
                     frameRate: options.frameRate,
                     showsCursor: options.showsCursor,
                     excludedWindowIDs: options.excludedWindowIDs,
