@@ -78,10 +78,13 @@ extension WindowSource {
     /// happily reports alongside real windows.
     init?(_ window: SCWindow) {
         guard window.isOnScreen,
-              window.windowLayer == 0,
               let app = window.owningApplication,
-              let title = window.title, !title.isEmpty,
-              window.frame.width >= 40, window.frame.height >= 40
+              let title = window.title,
+              Self.isUserFacing(
+                title: title,
+                bundleIdentifier: app.bundleIdentifier,
+                layer: window.windowLayer,
+                frame: window.frame)
         else { return nil }
 
         self.init(
@@ -90,5 +93,33 @@ extension WindowSource {
             applicationName: app.applicationName,
             bundleIdentifier: app.bundleIdentifier.isEmpty ? nil : app.bundleIdentifier,
             frame: window.frame)
+    }
+
+    /// Owners whose windows are system chrome, never a recording target.
+    ///
+    /// Stage Manager is the reason this list exists: it publishes several
+    /// layer-0, titled, full-size windows ("Gesture Blocking Overlay",
+    /// "App Icon Window") that satisfy every structural test below.
+    static let systemOwners: Set<String> = [
+        "com.apple.WindowManager",
+        "com.apple.dock",
+        "com.apple.controlcenter",
+        "com.apple.notificationcenterui",
+    ]
+
+    /// Split out from `init?` so it can be tested without an `SCWindow`, which
+    /// has no public initialiser.
+    static func isUserFacing(
+        title: String,
+        bundleIdentifier: String,
+        layer: Int,
+        frame: CGRect
+    ) -> Bool {
+        // Layer 0 is the normal window layer; menu bars, docks and overlays sit above.
+        layer == 0
+            && !title.isEmpty
+            && !systemOwners.contains(bundleIdentifier)
+            && frame.width >= 40
+            && frame.height >= 40
     }
 }
