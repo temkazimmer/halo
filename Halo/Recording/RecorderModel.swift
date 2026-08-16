@@ -1,5 +1,6 @@
 import AppKit
 import HaloCapture
+import HaloComposite
 import HaloExport
 import Observation
 import UniformTypeIdentifiers
@@ -42,6 +43,9 @@ final class RecorderModel {
     private let provider = ShareableContentProvider()
     private let camera = CameraCapture()
     private let bubble = BubbleController()
+    /// One compositor for both the preview and the recording — see Compositor.
+    /// Not UI state, so it stays out of observation.
+    @ObservationIgnored private var compositor: Compositor?
     private var tickTask: Task<Void, Never>?
 
     init() {
@@ -64,8 +68,42 @@ final class RecorderModel {
         bubble.onWindowIDChanged = { [weak self] windowID in
             guard let self else { return }
             self.isBubbleVisible = self.bubble.isVisible
+            self.updateBubbleLayout()
             Task { await self.syncExcludedWindows(windowID) }
         }
+
+        // Dragging or resizing must move the bubble in the recording too, not
+        // only in the preview.
+        bubble.onGeometryChanged = { [weak self] in
+            self?.updateBubbleLayout()
+        }
+    }
+
+    /// Maps the panel's frame from AppKit screen points into output pixels.
+    ///
+    /// Two conversions, both easy to get wrong: AppKit's y grows upward while
+    /// video's grows downward, and the panel is in points while the recording is
+    /// in native Retina pixels.
+    private func updateBubbleLayout() {
+        guard bubble.isVisible,
+              let frame = bubble.frame,
+              let display = selectedDisplay,
+              let screen = NSScreen.screens.first(where: {
+                  ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                      as? NSNumber)?.uint32Value == display.id
+              })
+        else {
+            session.bubbleLayout.clear()
+            return
+        }
+
+        let scale = CGFloat(display.scale)
+        let bounds = screen.frame
+        session.bubbleLayout.value = BubbleLayout(
+            centre: CGPoint(
+                x: (frame.midX - bounds.minX) * scale,
+                y: (bounds.maxY - frame.midY) * scale),
+            size: frame.width * scale)
     }
 
     var selectedDisplay: DisplaySource? {
@@ -103,14 +141,23 @@ final class RecorderModel {
         if bubble.isVisible {
             bubble.hide()
             camera.stop()
-        } else {
-            do {
-                try camera.start(deviceID: selectedCameraID)
-                bubble.show(session: camera.session)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+            return
         }
+
+        do {
+            let compositor = try makeCompositorIfNeeded()
+            try camera.start(deviceID: selectedCameraID)
+            bubble.show(compositor: compositor, frameLatch: camera.frameLatch)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func makeCompositorIfNeeded() throws -> Compositor {
+        if let compositor { return compositor }
+        let created = try Compositor()
+        compositor = created
+        return created
     }
 
     func selectCamera(_ deviceID: String?) {
@@ -143,6 +190,8 @@ final class RecorderModel {
         errorMessage = nil
         lastResult = nil
 
+        updateBubbleLayout()
+
         do {
             try await session.start(
                 display: display,
@@ -151,10 +200,11 @@ final class RecorderModel {
                     capturesSystemAudio: capturesSystemAudio,
                     capturesMicrophone: capturesMicrophone,
                     microphoneDeviceID: microphoneDeviceID,
-                    // Phase 4 composites the camera into the frame. Until then it
-                    // must be excluded, or the recording shows the floating panel
-                    // rather than a composited bubble.
-                    excludedWindowIDs: bubble.windowID.map { [$0] } ?? []))
+                    // Still excluded: the compositor draws the bubble into the
+                    // frame, so capturing the panel as well would record it twice.
+                    excludedWindowIDs: bubble.windowID.map { [$0] } ?? []),
+                camera: bubble.isVisible ? camera.frameLatch : nil,
+                compositor: bubble.isVisible ? compositor : nil)
             phase = .recording
             startTicking()
         } catch {

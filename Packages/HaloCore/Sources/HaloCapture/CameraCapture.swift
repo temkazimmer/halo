@@ -38,6 +38,18 @@ public final class CameraCapture {
     public private(set) var devices: [CameraDevice] = []
     public private(set) var activeDeviceID: String?
 
+    /// Newest camera frame, for the compositor to consume on its own schedule.
+    public let frameLatch = FrameLatch()
+
+    /// The format the camera is actually delivering, which the shader needs in
+    /// order to decode it correctly.
+    public private(set) var pixelFormat: OSType = kCVPixelFormatType_32BGRA
+
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let frameQueue = DispatchQueue(
+        label: "com.temazimmer.Halo.camera-frames", qos: .userInitiated)
+    private lazy var receiver = FrameReceiver(latch: frameLatch)
+
     /// Called when the device list changes — Continuity Cameras come and go as
     /// the iPhone wakes and sleeps.
     public var onDevicesChanged: (() -> Void)?
@@ -112,9 +124,48 @@ public final class CameraCapture {
             throw Failure.cannotAddInput(error.localizedDescription)
         }
 
+        if !session.outputs.contains(videoOutput), session.canAddOutput(videoOutput) {
+            // Late frames are worthless to a latch that only keeps the newest.
+            videoOutput.alwaysDiscardsLateVideoFrames = true
+            videoOutput.setSampleBufferDelegate(receiver, queue: frameQueue)
+            session.addOutput(videoOutput)
+        }
+
         session.commitConfiguration()
+
+        // Must come after the output joins the session: the available formats are
+        // empty until then.
+        pixelFormat = Self.preferredPixelFormat(for: videoOutput)
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat
+        ]
+        // The recording is deliberately not mirrored — viewers expect text behind
+        // you to read correctly. Only the preview layer mirrors.
+        if let connection = videoOutput.connection(with: .video),
+           connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
+
+        frameLatch.clear()
         activeDeviceID = device.uniqueID
         startRunning()
+    }
+
+    /// BGRA is not a native capture format: Apple notes it needs per-frame
+    /// transcoding and about 2.6x the memory of `420v`. The lossy biplanar
+    /// variants are visually identical to their uncompressed equivalents, so they
+    /// are preferred; the shader does the YCbCr conversion either way.
+    private static func preferredPixelFormat(for output: AVCaptureVideoDataOutput) -> OSType {
+        let preferred: [OSType] = [
+            kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarFullRange,
+            kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelFormatType_32BGRA,
+        ]
+        let available = output.availableVideoPixelFormatTypes
+        return preferred.first(where: available.contains) ?? kCVPixelFormatType_32BGRA
     }
 
     public func stop() {
@@ -124,6 +175,7 @@ public final class CameraCapture {
             if confined.isRunning { confined.stopRunning() }
         }
         activeDeviceID = nil
+        frameLatch.clear()
     }
 
     /// `AVCaptureSession.startRunning()` is documented as blocking, so Apple
@@ -134,6 +186,32 @@ public final class CameraCapture {
         nonisolated(unsafe) let confined = session
         sessionQueue.async {
             if !confined.isRunning { confined.startRunning() }
+        }
+    }
+}
+
+/// Receives camera frames on the capture queue and latches the newest.
+///
+/// Separate from `CameraCapture` because that type is main-actor; this one only
+/// ever runs on `frameQueue`, and holds nothing but a `Sendable` latch.
+private final class FrameReceiver: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, Sendable {
+    private let latch: FrameLatch
+
+    init(latch: FrameLatch) {
+        self.latch = latch
+        super.init()
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        // Same rule as the screen side: nothing derived from this buffer may
+        // outlive the callback, so the latch copies rather than retains.
+        autoreleasepool {
+            guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
+            latch.store(pixelBuffer)
         }
     }
 }

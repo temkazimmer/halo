@@ -1,5 +1,6 @@
-import AVFoundation
 import AppKit
+import HaloCapture
+import HaloComposite
 import HaloShapes
 import Observation
 
@@ -18,6 +19,13 @@ final class BubbleController {
     /// rebuild its content filter rather than restart.
     var onWindowIDChanged: ((CGWindowID?) -> Void)?
 
+    /// Fires whenever the bubble's frame changes, so the recording's layout can
+    /// follow it — including while a recording is running.
+    var onGeometryChanged: (() -> Void)?
+
+    /// The bubble's frame in screen points, for mapping into output pixels.
+    var frame: NSRect? { panel?.frame }
+
     private var panel: BubblePanel?
     private var view: BubbleView?
     private var size: CGFloat = 220
@@ -27,16 +35,17 @@ final class BubbleController {
     /// How close a drop has to land before it snaps rather than staying free.
     private static let snapDistance: CGFloat = 110
 
-    func show(session: AVCaptureSession) {
+    func show(compositor: Compositor, frameLatch: FrameLatch) {
         guard panel == nil else { return }
 
         let panel = BubblePanel(size: size)
-        let view = BubbleView(session: session)
+        let view = BubbleView(compositor: compositor, frameLatch: frameLatch)
         view.frame = NSRect(x: 0, y: 0, width: size, height: size)
         panel.contentView = view
 
         view.onDragEnded = { [weak self] frame in self?.settle(after: frame) }
         view.onResize = { [weak self] newSize in self?.resize(to: newSize) }
+        view.onGeometryChanged = { [weak self] in self?.onGeometryChanged?() }
 
         if let screen = NSScreen.main {
             panel.setFrameOrigin(
@@ -64,8 +73,8 @@ final class BubbleController {
         onWindowIDChanged?(nil)
     }
 
-    func toggle(session: AVCaptureSession) {
-        isVisible ? hide() : show(session: session)
+    func toggle(compositor: Compositor, frameLatch: FrameLatch) {
+        isVisible ? hide() : show(compositor: compositor, frameLatch: frameLatch)
     }
 
     // MARK: - Placement
@@ -86,6 +95,7 @@ final class BubbleController {
             panel.setFrameOrigin(
                 anchor.origin(in: screen.visibleFrame, size: newSize, inset: Self.inset))
         }
+        onGeometryChanged?()
     }
 
     /// Snaps to the nearest of the nine anchors if the drop landed close to one,
@@ -111,6 +121,10 @@ final class BubbleController {
             context.duration = 0.16
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().setFrameOrigin(best.origin)
+        } completionHandler: { [weak self] in
+            // NSAnimationContext types this as @Sendable but delivers it on the
+            // main thread.
+            MainActor.assumeIsolated { self?.onGeometryChanged?() }
         }
     }
 }

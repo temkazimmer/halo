@@ -1,5 +1,6 @@
 import CoreMedia
 import Foundation
+import HaloComposite
 import HaloExport
 
 /// What a finished recording produced.
@@ -77,6 +78,10 @@ public final class RecordingSession {
     /// own lock. Exposed so the UI can drive gains and read levels live.
     public let mixer = AudioMixer()
 
+    /// Where the bubble sits, in output pixels. Updated as the panel is dragged,
+    /// including mid-recording.
+    public let bubbleLayout = BubbleLayoutSlot()
+
     private var capture: ScreenCapture?
     private var startedAt: ContinuousClock.Instant?
     private var writer: MovieWriter?
@@ -87,7 +92,9 @@ public final class RecordingSession {
     public func start(
         display: DisplaySource,
         to url: URL,
-        options: RecordingOptions = RecordingOptions()
+        options: RecordingOptions = RecordingOptions(),
+        camera: FrameLatch? = nil,
+        compositor: Compositor? = nil
     ) async throws {
         guard state == .idle else { return }
 
@@ -115,12 +122,29 @@ public final class RecordingSession {
             videoQueue: videoQueue,
             systemAudioQueue: systemAudioQueue,
             microphoneQueue: microphoneQueue,
-            onFrame: { pixelBuffer, presentationTime in
+            onFrame: { [bubbleLayout] pixelBuffer, presentationTime in
                 // On videoQueue. Appending synchronously is what keeps us from
                 // retaining the frame's IOSurface past the callback.
                 guard failure.message == nil else { return }
                 do {
-                    try writer.append(pixelBuffer, presentationTime: presentationTime)
+                    // Compose only when there is a bubble to compose. Without one
+                    // the screen frame goes straight to the encoder — no render
+                    // pass, no destination buffer, nothing to gain.
+                    if let compositor,
+                       let camera,
+                       let layout = bubbleLayout.value,
+                       let frame = camera.latestFrame() {
+                        let destination = try writer.makeDestinationBuffer()
+                        try compositor.render(
+                            screen: pixelBuffer,
+                            camera: frame.buffer,
+                            cameraPixelFormat: frame.format,
+                            layout: layout,
+                            into: destination)
+                        try writer.append(destination, presentationTime: presentationTime)
+                    } else {
+                        try writer.append(pixelBuffer, presentationTime: presentationTime)
+                    }
                     // Audio is drained here, on the one queue that also owns the
                     // video append — so the audio writer input is only ever
                     // touched from a single thread, even though two queues feed

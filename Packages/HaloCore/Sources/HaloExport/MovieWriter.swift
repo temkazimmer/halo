@@ -61,6 +61,14 @@ public final class MovieWriter: @unchecked Sendable {
     }
     private let session = Mutex(Session())
 
+    /// CoreVideo pool types carry no `Sendable` annotation; CF retain and release
+    /// are thread-safe and this one is only reached through its own lock.
+    private struct PoolBox: @unchecked Sendable {
+        var pool: CVPixelBufferPool?
+    }
+    private let fallbackPoolBox = Mutex(PoolBox())
+    private let pixelBufferAttributes: [String: any Sendable]
+
     public private(set) var appendedFrameCount = 0
     /// Frames skipped because the encoder was not keeping up.
     public private(set) var droppedFrameCount = 0
@@ -73,6 +81,7 @@ public final class MovieWriter: @unchecked Sendable {
 
     public init(url: URL, settings: ExportSettings, includesAudio: Bool = false) throws {
         outputURL = url
+        pixelBufferAttributes = settings.pixelBufferAttributes
 
         // AVAssetWriter refuses to overwrite. NSSavePanel has already taken the
         // user's consent to replace by this point.
@@ -104,6 +113,41 @@ public final class MovieWriter: @unchecked Sendable {
         } else {
             audioInput = nil
         }
+    }
+
+    // MARK: - Destination buffers
+
+    /// A buffer for the compositor to render into.
+    ///
+    /// Prefers the adaptor's own pool, so appending needs no copy. That pool only
+    /// exists once writing has started, hence the fallback — which requests the
+    /// same attributes, so it is still IOSurface-backed and Metal-compatible.
+    public func makeDestinationBuffer() throws -> CVPixelBuffer {
+        if let pool = adaptor.pixelBufferPool {
+            var buffer: CVPixelBuffer?
+            if CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &buffer)
+                == kCVReturnSuccess, let buffer {
+                return buffer
+            }
+        }
+
+        let pool = try fallbackPoolBox.withLock { box -> CVPixelBufferPool in
+            if let existing = box.pool { return existing }
+            var created: CVPixelBufferPool?
+            guard CVPixelBufferPoolCreate(
+                kCFAllocatorDefault, nil,
+                pixelBufferAttributes as CFDictionary, &created) == kCVReturnSuccess,
+                let created
+            else { throw Failure.writingFailed("could not allocate an output buffer pool") }
+            box.pool = created
+            return created
+        }
+
+        var buffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &buffer)
+            == kCVReturnSuccess, let buffer
+        else { throw Failure.writingFailed("could not allocate an output buffer") }
+        return buffer
     }
 
     // MARK: - Session
