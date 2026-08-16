@@ -4,15 +4,22 @@ import SwiftUI
 /// show, so onboarding takes the whole window rather than sitting in a sheet.
 struct ControlPanelView: View {
     @Environment(PermissionsModel.self) private var permissions
+    @State private var recorder = RecorderModel()
 
     var body: some View {
         Group {
             if permissions.isReady {
-                SourcePickerView()
+                VStack(spacing: 0) {
+                    SourcePickerView()
+                    Divider()
+                    RecordingControlsView()
+                }
+                .environment(recorder)
+                .task { await recorder.loadSources() }
             } else {
                 OnboardingView()
             }
         }
-        .frame(minWidth: 420, minHeight: 480)
+        .frame(minWidth: 460, minHeight: 520)
     }
 }

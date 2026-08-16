@@ -1,74 +1,59 @@
 import HaloCapture
 import SwiftUI
 
-/// Lists what can be recorded. Phase 0 only shows the inventory — choosing a
-/// source starts mattering in Phase 1.
+/// Choose what to record. Displays are selectable; windows are listed but not yet
+/// a capture target, and say so rather than silently doing nothing.
 struct SourcePickerView: View {
-    @State private var sources = ShareableSources()
-    @State private var errorMessage: String?
-    @State private var isLoading = false
-
-    private let provider = ShareableContentProvider()
+    @Environment(RecorderModel.self) private var recorder
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Sources")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-                Button {
-                    Task { await load() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .disabled(isLoading)
-            }
+        @Bindable var recorder = recorder
 
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            header
 
-            List {
+            List(selection: $recorder.selectedDisplayID) {
                 Section("Displays") {
-                    if sources.displays.isEmpty {
-                        Text("No displays found")
-                            .foregroundStyle(.secondary)
+                    if recorder.sources.displays.isEmpty {
+                        Text("No displays found").foregroundStyle(.secondary)
                     } else {
-                        ForEach(sources.displays) { DisplayRow(display: $0) }
+                        ForEach(recorder.sources.displays) { display in
+                            DisplayRow(display: display).tag(display.id)
+                        }
                     }
                 }
 
-                Section("Windows") {
-                    if sources.windows.isEmpty {
-                        Text("No windows found")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(sources.windows) { WindowRow(window: $0) }
-                    }
+                Section {
+                    ForEach(recorder.sources.windows) { WindowRow(window: $0) }
+                } header: {
+                    Text("Windows")
+                } footer: {
+                    Text("Window capture arrives in a later phase.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
             .listStyle(.inset)
             .alternatingRowBackgrounds()
+            .disabled(recorder.phase != .idle)
         }
-        .padding(24)
-        .task { await load() }
     }
 
-    private func load() async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            // Re-fetched every time: SCShareableContent snapshots go stale at once.
-            sources = try await provider.fetch()
-            errorMessage = nil
-        } catch ShareableContentError.permissionDenied {
-            errorMessage = "Screen Recording permission was revoked. Grant it again and relaunch Halo."
-        } catch {
-            errorMessage = error.localizedDescription
+    private var header: some View {
+        HStack {
+            Text("Sources")
+                .font(.title3.weight(.semibold))
+            Spacer()
+            Button {
+                Task { await recorder.loadSources() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .disabled(recorder.isLoadingSources || recorder.phase != .idle)
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .padding(.bottom, 12)
     }
 }
 
@@ -114,19 +99,20 @@ private struct WindowRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "macwindow")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(window.title)
-                    .lineLimit(1)
+                Text(window.title).lineLimit(1)
                 Text(window.applicationName)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
 
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
+        .foregroundStyle(.secondary)
+        .selectionDisabled()
     }
 }

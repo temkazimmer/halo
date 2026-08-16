@@ -7,10 +7,12 @@ let package = Package(
     name: "HaloCore",
     platforms: [.macOS(.v15)],
     products: [
-        .library(name: "HaloCore", targets: ["HaloCapture"])
+        .library(name: "HaloCore", targets: ["HaloCapture", "HaloExport"])
     ],
     targets: [
-        .target(name: "HaloCapture"),
+        .target(name: "HaloExport"),
+        .target(name: "HaloCapture", dependencies: ["HaloExport"]),
         .testTarget(name: "HaloCaptureTests", dependencies: ["HaloCapture"]),
+        .testTarget(name: "HaloExportTests", dependencies: ["HaloExport"]),
     ]
 )
