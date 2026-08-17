@@ -17,7 +17,8 @@ struct Uniforms {
     float2 shadowOffset;     // normalised
 
     float cornerAntialias;   // minimum AA width, normalised
-    float feather;           // extra softness beyond analytic AA
+    float feather;           // fine softness beyond analytic AA, normalised
+    float edgeBlur;          // wide soft falloff, normalised
     float cameraAspect;
     float zoom;
     float rotation;          // radians
@@ -257,10 +258,12 @@ fragment float4 compositeFragment(
         over(color, alpha, srgbToLinear(u.shadowColor.rgb), shadowAlpha * u.shadowColor.a);
     }
 
-    float maskAlpha = 1.0 - smoothstep(-aa, aa, d);
-    if (u.feather > 0.0) {
-        maskAlpha *= smoothstep(0.0, u.feather, -d + u.feather);
-    }
+    // Softness widens the transition band itself. Multiplying a second ramp on
+    // top does almost nothing, because the analytic AA has already driven alpha
+    // to zero everywhere that ramp would act — which is why raising feather used
+    // to have no visible effect.
+    float softness = max(aa, u.feather + u.edgeBlur);
+    float maskAlpha = 1.0 - smoothstep(-softness, softness, d);
 
     if (maskAlpha > 0.0) {
         // Map the bubble's local space onto the camera texture, preserving aspect

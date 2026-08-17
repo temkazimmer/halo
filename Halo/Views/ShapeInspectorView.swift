@@ -39,6 +39,9 @@ struct ShapeInspectorView: View {
                 "Zoom", value: $recorder.style.zoom, range: 1...3,
                 format: "%.2f×", defaultValue: 1)
             ParameterSlider(
+                "Edge Blur", value: $recorder.style.edgeBlur, range: 0...1,
+                format: "%.0f%%", defaultValue: 0, displayScale: 100)
+            ParameterSlider(
                 "Feather", value: $recorder.style.feather, range: 0...8,
                 format: "%.1f px", defaultValue: 0.5)
 

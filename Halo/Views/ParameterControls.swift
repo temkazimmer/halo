@@ -11,6 +11,9 @@ struct ParameterSlider: View {
     let range: ClosedRange<Double>
     let format: String
     let defaultValue: Double
+    /// Multiplier applied for display only, so a 0...1 value can read as a
+    /// percentage without the model carrying UI units.
+    let displayScale: Double
 
     @State private var isEditing = false
     @State private var draft = ""
@@ -20,13 +23,15 @@ struct ParameterSlider: View {
         value: Binding<Double>,
         range: ClosedRange<Double>,
         format: String,
-        defaultValue: Double
+        defaultValue: Double,
+        displayScale: Double = 1
     ) {
         self.title = title
         self._value = value
         self.range = range
         self.format = format
         self.defaultValue = defaultValue
+        self.displayScale = displayScale
     }
 
     var body: some View {
@@ -45,13 +50,13 @@ struct ParameterSlider: View {
                     .frame(width: 62)
                     .onSubmit(commit)
             } else {
-                Text(String(format: format, value))
+                Text(String(format: format, value * displayScale))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 62, alignment: .trailing)
                     .contentShape(.rect)
                     .onTapGesture {
-                        draft = String(format: "%g", value)
+                        draft = String(format: "%g", value * displayScale)
                         isEditing = true
                     }
             }
@@ -65,7 +70,8 @@ struct ParameterSlider: View {
 
     private func commit() {
         if let parsed = Double(draft) {
-            value = min(range.upperBound, max(range.lowerBound, parsed))
+            let unscaled = parsed / displayScale
+            value = min(range.upperBound, max(range.lowerBound, unscaled))
         }
         isEditing = false
     }

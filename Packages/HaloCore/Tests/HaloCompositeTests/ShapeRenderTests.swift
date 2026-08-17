@@ -73,6 +73,43 @@ struct ShapeRenderTests {
         #expect(rounded < sharp * 1.25)
     }
 
+    @Test("Edge blur widens the falloff, and works on any shape")
+    func edgeBlurSoftensAnyShape() throws {
+        for shape in [BubbleShape.circle, .star(points: 5, innerRatio: 0.45, rounding: 0)] {
+            let sharp = try Self.transitionWidth(of: shape, blur: 0)
+            let soft = try Self.transitionWidth(of: shape, blur: 0.35)
+            #expect(
+                soft > sharp * 4,
+                "\(shape.name) blurred barely wider than sharp: \(soft) vs \(sharp)")
+        }
+    }
+
+    @Test("Raising blur widens the edge monotonically")
+    func blurIsProgressive() throws {
+        let none = try Self.transitionWidth(of: .circle, blur: 0)
+        let some = try Self.transitionWidth(of: .circle, blur: 0.15)
+        let lots = try Self.transitionWidth(of: .circle, blur: 0.4)
+        #expect(some > none)
+        #expect(lots > some)
+    }
+
+    /// How many pixels along a horizontal line through the centre are partially
+    /// transparent — which is exactly what "how blurred is the edge" means.
+    private static func transitionWidth(of shape: BubbleShape, blur: Double) throws -> Int {
+        let compositor = try Compositor()
+        let camera = try filled(red: 255, green: 255, blue: 255)
+        var style = BubbleStyle(shape: shape, feather: 0)
+        style.edgeBlur = blur
+
+        let pixels = try renderPreview(compositor, camera: camera, style: style)
+        var partial = 0
+        for x in 0..<side {
+            let alpha = sample(pixels, x: x, y: side / 2).alpha
+            if alpha > 8 && alpha < 247 { partial += 1 }
+        }
+        return partial
+    }
+
     @Test("A border draws a ring on the shape's own edge")
     func borderDrawsOnTheEdge() throws {
         let compositor = try Compositor()

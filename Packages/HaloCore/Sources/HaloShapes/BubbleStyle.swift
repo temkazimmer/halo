@@ -72,8 +72,14 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
     public var mirrorOutput: Bool
 
     // Edge
-    /// Softness beyond the analytic antialiasing, in points.
+    /// Fine softness beyond the analytic antialiasing, in points. Small by
+    /// nature — for a visible soft edge use `edgeBlur`.
     public var feather: Double
+    /// Wide, soft falloff as a fraction of the bubble's half-extent, 0...1.
+    ///
+    /// Relative rather than absolute so a blurred bubble looks the same at any
+    /// size — an edge measured in points would tighten as the bubble grew.
+    public var edgeBlur: Double
     public var border: BorderStyle?
     public var shadow: ShadowStyle?
 
@@ -87,6 +93,7 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
         mirrorPreview: Bool = true,
         mirrorOutput: Bool = false,
         feather: Double = 0.5,
+        edgeBlur: Double = 0,
         border: BorderStyle? = nil,
         shadow: ShadowStyle? = nil
     ) {
@@ -99,6 +106,7 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
         self.mirrorPreview = mirrorPreview
         self.mirrorOutput = mirrorOutput
         self.feather = feather
+        self.edgeBlur = edgeBlur
         self.border = border
         self.shadow = shadow
     }
@@ -119,7 +127,32 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
     /// high-amplitude blob most obviously — and because the clip follows the
     /// window edge it appears as a rectangle around the bubble.
     public var panelSize: Double {
-        size * shape.boundingRadius + decorationPadding * 2
+        // Blur spreads outwards from the edge, so it needs room just as a border
+        // or shadow does — otherwise the falloff is cut off square by the panel.
+        let blurSpread = size / 2 * edgeBlur
+        return size * shape.boundingRadius + (decorationPadding + blurSpread) * 2
+    }
+
+    /// Decoded field by field so a style saved before a parameter existed still
+    /// loads — synthesised `Decodable` requires every key, which would silently
+    /// discard the user's saved presets on the first update that adds one.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let fallback = BubbleStyle()
+        shape = try container.decodeIfPresent(BubbleShape.self, forKey: .shape) ?? fallback.shape
+        size = try container.decodeIfPresent(Double.self, forKey: .size) ?? fallback.size
+        aspect = try container.decodeIfPresent(Double.self, forKey: .aspect) ?? fallback.aspect
+        rotation = try container.decodeIfPresent(Double.self, forKey: .rotation) ?? fallback.rotation
+        zoom = try container.decodeIfPresent(Double.self, forKey: .zoom) ?? fallback.zoom
+        offset = try container.decodeIfPresent(CGPoint.self, forKey: .offset) ?? fallback.offset
+        mirrorPreview = try container.decodeIfPresent(Bool.self, forKey: .mirrorPreview)
+            ?? fallback.mirrorPreview
+        mirrorOutput = try container.decodeIfPresent(Bool.self, forKey: .mirrorOutput)
+            ?? fallback.mirrorOutput
+        feather = try container.decodeIfPresent(Double.self, forKey: .feather) ?? fallback.feather
+        edgeBlur = try container.decodeIfPresent(Double.self, forKey: .edgeBlur) ?? fallback.edgeBlur
+        border = try container.decodeIfPresent(BorderStyle.self, forKey: .border)
+        shadow = try container.decodeIfPresent(ShadowStyle.self, forKey: .shadow)
     }
 
     public func clamped() -> BubbleStyle {
@@ -129,6 +162,7 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
         copy.aspect = min(2, max(0.5, aspect))
         copy.zoom = min(3, max(1, zoom))
         copy.feather = min(8, max(0, feather))
+        copy.edgeBlur = min(1, max(0, edgeBlur))
         copy.offset = CGPoint(
             x: min(1, max(-1, offset.x)), y: min(1, max(-1, offset.y)))
         return copy

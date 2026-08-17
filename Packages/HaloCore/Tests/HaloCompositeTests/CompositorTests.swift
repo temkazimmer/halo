@@ -19,13 +19,13 @@ struct CompositorTests {
 
     @Test("Swift and Metal uniform layouts agree")
     func uniformLayoutIsStable() {
-        // 2 float4 (16 each) + 4 float2 (8 each) + 14 float + 6 uint (4 each)
-        // = 32 + 32 + 56 + 24. Guards the hand-maintained match with `Uniforms`
+        // 2 float4 (16 each) + 4 float2 (8 each) + 15 float + 6 uint (4 each)
+        // = 32 + 32 + 60 + 24. Guards the hand-maintained match with `Uniforms`
         // in Shaders.metal: adding a field on one side only shows up here rather
         // than as corrupt video.
-        #expect(MemoryLayout<CompositorUniforms>.size == 144)
+        #expect(MemoryLayout<CompositorUniforms>.size == 148)
         #expect(MemoryLayout<CompositorUniforms>.alignment == 16)
-        #expect(MemoryLayout<CompositorUniforms>.stride == 144)
+        #expect(MemoryLayout<CompositorUniforms>.stride == 160)
     }
 
     @Test("The preview renders the same mask with a transparent surround")

@@ -23,6 +23,7 @@ struct CompositorUniforms {
 
     var cornerAntialias: Float
     var feather: Float
+    var edgeBlur: Float
     var cameraAspect: Float
     var zoom: Float
     var rotation: Float

@@ -265,7 +265,7 @@ public final class Compositor {
                 borderColor: .zero, shadowColor: .zero,
                 bubbleCentre: .zero, bubbleRadius: SIMD2(1, 1),
                 cameraOffset: .zero, shadowOffset: .zero,
-                cornerAntialias: 0, feather: 0, cameraAspect: 1, zoom: 1,
+                cornerAntialias: 0, feather: 0, edgeBlur: 0, cameraAspect: 1, zoom: 1,
                 rotation: 0, aspect: 1,
                 shapeA: 0, shapeB: 0, shapeC: 0, shapeD: 0,
                 borderWidth: 0, shadowRadius: 0, shadowOpacity: 0, time: 0,
@@ -296,6 +296,9 @@ public final class Compositor {
             // large output still resolves cleanly.
             cornerAntialias: 1.0 / radius,
             feather: Float(style.feather) / radius,
+            // Already a fraction of the half-extent, so it needs no conversion —
+            // which is what keeps a blurred edge looking the same at any size.
+            edgeBlur: Float(style.edgeBlur),
             cameraAspect: cameraWidth / cameraHeight,
             zoom: Float(max(style.zoom, 0.01)),
             rotation: Float(style.rotation),
