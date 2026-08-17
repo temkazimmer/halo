@@ -51,14 +51,57 @@ struct BoundingRadiusTests {
 
     @Test("Panel size covers the shape's extent and its decorations")
     func panelSizeLeavesRoomForEverything() {
+        // feather 0 so this measures shape extent and decorations alone.
         var style = BubbleStyle(
-            shape: .blob(lobes: 12, amplitude: 0.34, phase: 0, seed: 1), size: 400)
+            shape: .blob(lobes: 12, amplitude: 0.34, phase: 0, seed: 1),
+            size: 400, feather: 0)
         #expect(abs(style.panelSize - 536) < 0.001)  // 400 * 1.34
 
         style.border = BorderStyle(width: 6)
         style.shadow = ShadowStyle(radius: 20, opacity: 0.4, offset: CGPoint(x: 0, y: 8))
         // 536 + 2 * (6 + 20 + 8)
         #expect(abs(style.panelSize - 604) < 0.001)
+    }
+
+    @Test("The panel leaves room for a soft edge to fall off in")
+    func panelMakesRoomForSoftness() {
+        var style = BubbleStyle(shape: .circle, size: 200, feather: 0)
+        let tight = style.panelSize
+
+        style.feather = 120
+        // Softness ramps outward from the edge on both sides.
+        #expect(style.panelSize == tight + 240)
+
+        style.feather = 0
+        style.edgeBlur = 0.5
+        // Blur is relative: half the half-extent, so 50pt each side at size 200.
+        #expect(style.panelSize == tight + 100)
+    }
+
+    @Test("Panel size is capped so a soft edge cannot swallow the screen")
+    func panelSizeIsCapped() {
+        let style = BubbleStyle(
+            shape: .blob(lobes: 6, amplitude: 0.4, phase: 0, seed: 1),
+            size: 520, feather: 250, edgeBlur: 1)
+        #expect(style.panelSize == BubbleStyle.maximumPanelSize)
+    }
+
+    @Test("Hit-testing ignores the soft falloff, so it cannot block clicks")
+    func interactiveSizeExcludesSoftness() {
+        var style = BubbleStyle(shape: .circle, size: 200, feather: 250)
+        style.edgeBlur = 0.8
+
+        // The panel grows to hold the falloff...
+        #expect(style.panelSize > 600)
+        // ...but only the solid part takes the mouse.
+        #expect(style.interactiveSize == 200)
+    }
+
+    @Test("Feather clamps to its documented maximum")
+    func featherClamps() {
+        var style = BubbleStyle()
+        style.feather = 10_000
+        #expect(style.clamped().feather == BubbleStyle.maximumFeather)
     }
 
     @Test("Every shape's panel is at least as wide as the shape itself")

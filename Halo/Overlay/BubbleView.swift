@@ -100,6 +100,21 @@ final class BubbleView: NSView {
         }
     }
 
+    /// Only the solid part of the bubble takes the mouse.
+    ///
+    /// A heavily feathered bubble needs a panel far larger than anything that
+    /// looks like the bubble, and a panel swallows clicks across its whole
+    /// bounds — so without this a soft edge would block a large invisible region
+    /// of the screen from whatever is underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let interactive = CGFloat(style.interactiveSize)
+        let centre = NSPoint(x: bounds.midX, y: bounds.midY)
+        let inside = NSRect(
+            x: centre.x - interactive / 2, y: centre.y - interactive / 2,
+            width: interactive, height: interactive)
+        return inside.contains(convert(point, from: superview)) ? self : nil
+    }
+
     // MARK: - Dragging
     //
     // `super` is deliberately never called: the default handling would activate

@@ -42,8 +42,9 @@ struct ShapeInspectorView: View {
                 "Edge Blur", value: $recorder.style.edgeBlur, range: 0...1,
                 format: "%.0f%%", defaultValue: 0, displayScale: 100)
             ParameterSlider(
-                "Feather", value: $recorder.style.feather, range: 0...8,
-                format: "%.1f px", defaultValue: 0.5)
+                "Feather", value: $recorder.style.feather,
+                range: 0...BubbleStyle.maximumFeather,
+                format: "%.0f px", defaultValue: 0.5)
 
             Divider()
 

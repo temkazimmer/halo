@@ -72,8 +72,10 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
     public var mirrorOutput: Bool
 
     // Edge
-    /// Fine softness beyond the analytic antialiasing, in points. Small by
-    /// nature — for a visible soft edge use `edgeBlur`.
+    /// Soft falloff in points, measured outward from the edge.
+    ///
+    /// An absolute length, so it stays put as the bubble is resized — unlike
+    /// `edgeBlur`, which scales with the shape. Both add together.
     public var feather: Double
     /// Wide, soft falloff as a fraction of the bubble's half-extent, 0...1.
     ///
@@ -111,6 +113,19 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
         self.shadow = shadow
     }
 
+    public static let maximumFeather: Double = 250
+    /// Beyond this the panel is more invisible margin than bubble, and at that
+    /// point the tail of the falloff is not visible anyway.
+    public static let maximumPanelSize: Double = 1000
+
+    /// How far the soft edge reaches past the shape, in points.
+    ///
+    /// Both softness controls ramp outward from the edge, so this is what the
+    /// panel has to leave room for.
+    public var edgeSpread: Double {
+        feather + size / 2 * edgeBlur
+    }
+
     /// Extra room the panel needs around the shape so a border or shadow is not
     /// clipped by the window edge.
     public var decorationPadding: Double {
@@ -127,10 +142,21 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
     /// high-amplitude blob most obviously — and because the clip follows the
     /// window edge it appears as a rectangle around the bubble.
     public var panelSize: Double {
-        // Blur spreads outwards from the edge, so it needs room just as a border
-        // or shadow does — otherwise the falloff is cut off square by the panel.
-        let blurSpread = size / 2 * edgeBlur
-        return size * shape.boundingRadius + (decorationPadding + blurSpread) * 2
+        // Softness spreads outwards from the edge, so it needs room just as a
+        // border or shadow does — otherwise the falloff is cut off square by the
+        // panel edge.
+        let wanted = size * shape.boundingRadius + (decorationPadding + edgeSpread) * 2
+        return min(Self.maximumPanelSize, wanted)
+    }
+
+    /// The area worth treating as the bubble for hit-testing.
+    ///
+    /// The soft falloff can extend the panel far past anything you would call
+    /// the bubble, and the panel swallows clicks across its whole bounds — so a
+    /// heavily feathered bubble would block a large, invisible region of the
+    /// screen. Grabbing the solid part is what people mean by grabbing it.
+    public var interactiveSize: Double {
+        size * shape.boundingRadius + decorationPadding * 2
     }
 
     /// Decoded field by field so a style saved before a parameter existed still
@@ -161,7 +187,7 @@ public struct BubbleStyle: Equatable, Codable, Hashable, Sendable {
         copy.size = min(520, max(120, size))
         copy.aspect = min(2, max(0.5, aspect))
         copy.zoom = min(3, max(1, zoom))
-        copy.feather = min(8, max(0, feather))
+        copy.feather = min(Self.maximumFeather, max(0, feather))
         copy.edgeBlur = min(1, max(0, edgeBlur))
         copy.offset = CGPoint(
             x: min(1, max(-1, offset.x)), y: min(1, max(-1, offset.y)))
